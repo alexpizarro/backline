@@ -70,9 +70,10 @@ for non-technical people, were reused here.
 
 ## What it does
 
-- **Lead and rhythm guitar as separate tracks.** Remove the solo and keep the rhythm. It's built in, with
-  nothing extra to install. It works best on the usual metal/rock mix, with rhythm guitars panned left and
-  right and the solo in the centre.
+- **Lead and rhythm guitar as separate tracks.** Remove the solo and keep the rhythm. An AI model trained
+  on lead vs rhythm guitar works together with a stereo method, all built in, with nothing extra to install.
+  It works best on the usual metal/rock mix, with rhythm guitars panned left and right and the solo in the
+  centre.
 - **"I'm playing."** One click removes your part (lead, rhythm, bass, drums or vocals) and is remembered
   for the next song. Guide mode plays your part quietly for reference.
 - **Slow down without changing key** from 50 % to 150 %. A **speed trainer** raises the tempo a little
@@ -83,7 +84,7 @@ for non-technical people, were reused here.
 - **Mini player** that floats over tabs, a DAW or a video lesson.
 - **Get songs in** from a file, a YouTube link, or by recording from any app on your Mac.
 - **Save a backing track** (WAV, AIFF or MP3) with your speed and pitch applied.
-- Everything runs on your Mac. A 4-minute song splits in about 5 seconds on an M3 Max.
+- Everything runs on your Mac. A song is ready in about 11 seconds on an M3 Max.
 
 <p>
   <img src="docs/images/mini-player.png" alt="Mini player" width="440">
@@ -105,6 +106,7 @@ are included with Backline.
 |---|---|
 | [StemDeck](https://github.com/stemdeckapp/stemdeck) | Free, cross-platform stem splitter with a DAW-style mixer. Mac, Windows, Linux, Docker |
 | [Demucs](https://github.com/adefossez/demucs) | Meta's open music-separation model. Backline uses its 6-stem version |
+| drypaint lead/rhythm model | A community HTDemucs model that separates lead from rhythm guitar. Backline blends it with its own stereo method |
 | [Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui) | The go-to desktop app for vocal and instrument separation, with many models |
 | [python-audio-separator](https://github.com/nomadkaraoke/python-audio-separator) | Command-line and Python access to the UVR models |
 | [Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) | Training code and many community models, including guitar-specific ones |
@@ -139,7 +141,7 @@ swift test --package-path BacklineKit      # engine and DSP tests
 
 ## Licences
 
-- **Models:** Beat This! (code and weights MIT). Demucs: the code is MIT; Meta's pretrained HTDemucs weights
+- **Models:** Beat This! (code and weights MIT). Lead/rhythm guitar model by drypaint (HTDemucs, via MVSep community). Demucs: the code is MIT; Meta's pretrained HTDemucs weights
   are not under MIT and are described by their author as provided for research purposes. Backline is free
   and non-commercial and credits them.
 - **Audio code:** Signalsmith Stretch and Linear (MIT). LAME (LGPL, loaded as a replaceable library).

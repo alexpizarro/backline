@@ -1,7 +1,7 @@
 import Accelerate
 import Foundation
 
-/// Lead vs rhythm guitar split of a stereo guitar stem by stereo position (no ML, so nothing to license).
+/// Lead vs rhythm guitar split of a stereo guitar stem by stereo position (no ML).
 ///
 /// Metal/rock convention: rhythm guitars are double/quad-tracked and panned hard left/right, so they are
 /// decorrelated between channels; a lead or solo is usually one take panned centre, so it is coherent.

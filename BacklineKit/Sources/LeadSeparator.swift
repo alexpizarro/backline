@@ -2,12 +2,10 @@ import Accelerate
 import CoreML
 import Foundation
 
-/// Optional ML lead-guitar extractor: a 2-source (lead, rhythm) HTDemucs checkpoint converted to Core ML
-/// (STFT outside the graph, same `DemucsSTFT` as the 6-source separator). Runs MSST's "demucs" demix:
-/// 3 s chunks, 50 % overlap, right-zero-padded chunks, plain averaging, no whole-track normalisation.
-///
-/// Used only when a build bundles a model whose licence allows it; otherwise Backline uses the stereo
-/// `GuitarSplitter` alone. Users never install models.
+/// ML lead-guitar extractor: a 2-source (lead, rhythm) HTDemucs model converted to Core ML (STFT outside the
+/// graph, same `DemucsSTFT` as the 6-source separator). Runs MSST's "demucs" demix: 3 s chunks, 50 % overlap,
+/// right-zero-padded chunks, plain averaging, no whole-track normalisation. Its lead estimate is blended
+/// 50/50 with the stereo `GuitarSplitter`.
 public final class LeadSeparator: @unchecked Sendable {
     public static let segment = 132_300          // 3 s at 44.1 kHz
     public static let step = 66_150              // 50 % overlap
@@ -23,8 +21,7 @@ public final class LeadSeparator: @unchecked Sendable {
         model = try MLModel(contentsOf: modelURL, configuration: config)
     }
 
-    /// A lead/rhythm model shipped inside the app bundle, if this build includes one. There is no
-    /// user-installed path: people never have to add anything to Backline.
+    /// The bundled model (Resources/LeadRhythmHTDemucs.mlmodelc).
     public static func bundledModel(in bundle: Bundle = .main) -> URL? {
         bundle.url(forResource: modelName, withExtension: "mlmodelc")
     }

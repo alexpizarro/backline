@@ -51,6 +51,20 @@ enum Snapshotter {
                 NSApp.terminate(nil)
                 return
             }
+            if CommandLine.arguments.contains("--time-import"), let song = songArg {
+                // Wall-clock time from "open" to the mixer, with the phase breakdown.
+                let t0 = Date(); var marks: [String] = []; var last = -1
+                model.open(song)
+                while model.screen != .mixer {
+                    if case .failed = model.screen { break }
+                    if model.importProgress.phase != last { last = model.importProgress.phase; marks.append("phase \(last) at \(String(format: "%.1f", Date().timeIntervalSince(t0)))s") }
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                marks.append("mixer at \(String(format: "%.1f", Date().timeIntervalSince(t0)))s split=\(model.song?.guitarSplit?.method ?? "-")")
+                try? marks.joined(separator: "\n").write(to: dir.appendingPathComponent("timing.txt"), atomically: true, encoding: .utf8)
+                NSApp.terminate(nil)
+                return
+            }
             if CommandLine.arguments.contains("--add-empty") {
                 // From the start screen (no song open), "+ Add song" must show the choice sheet, not a file dialog.
                 try? await Task.sleep(for: .seconds(0.5))
