@@ -1,5 +1,12 @@
 # Backline
 
+## [⬇ Download Backline for Mac](https://github.com/alexpizarro/backline/releases/latest/download/Backline.dmg)
+
+Free. For Macs with Apple silicon (M1 or newer) on macOS 26. Open the file, drag Backline into
+Applications, and you're done.
+
+---
+
 **A Mac practice player for guitarists. Drop in a song, take your part out, and play along.**
 
 Backline splits a song into instruments on your Mac. Nothing is uploaded. Turn off the part you play,
@@ -12,16 +19,15 @@ then loop, slow down, change the pitch and count in. Save the result as a backin
 **You need:** a Mac with Apple silicon (M1 or newer) running macOS 26, and about 1 GB of free space.
 Nothing else: no Terminal, no extra downloads, no admin password.
 
-**1. Download.** Get **Backline-0.14.dmg** from the
-[latest release](https://github.com/alexpizarro/backline/releases/latest). Your browser saves it in
-**Downloads**.
+**1. Download.** Click **[Download Backline for Mac](https://github.com/alexpizarro/backline/releases/latest/download/Backline.dmg)**.
+Your browser saves **Backline.dmg** in **Downloads**.
 
 **2. Open it and drag Backline into Applications.** Double-click the file you downloaded. This window
 opens. Drag the Backline icon onto the Applications folder.
 
 <img src="docs/images/install-drag.png" alt="The Backline installer window: drag the Backline icon onto the Applications folder" width="620">
 
-*(Picture of the installer window. The version number in the title matches the file you downloaded.)*
+*(Picture of the installer window. The version number in its title is the version you downloaded.)*
 
 **3. Open Backline.** Open your **Applications** folder and double-click **Backline**. The first time,
 your Mac asks *"Backline is an app downloaded from the Internet. Are you sure you want to open it?"*
