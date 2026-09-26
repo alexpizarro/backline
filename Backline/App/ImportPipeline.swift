@@ -131,8 +131,7 @@ nonisolated enum ImportPipeline {
             }
             var r = GuitarSplitter.split(src)
             // ML lead model, blended 50/50 with the stereo split (scored best on the ground truth: backing
-            // SDR 12.6 vs 12.2 dB). Only used when the app ships one (Resources/LeadRhythm.mlmodelc); nothing
-            // is ever installed by the user.
+            // SDR 12.6 vs 12.2 dB).
             if let url = LeadSeparator.bundledModel(), let ml = try? LeadSeparator(modelURL: url),
                let mlLead = try? ml.lead(of: src, isCancelled: isCancelled) {
                 var lead = r.lead

@@ -49,7 +49,7 @@
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Backline records a song from another app so it can split it into parts. Recordings stay on your Mac.</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>© 2026 Backline. Demucs © Meta (MIT). Signalsmith Stretch © Signalsmith Audio (MIT).</string>
+	<string>© 2026 Backline. Demucs © Meta. Signalsmith Stretch © Signalsmith Audio (MIT).</string>
 	<key>NSMainNibFile</key>
 	<string></string>
 </dict>

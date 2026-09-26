@@ -6,6 +6,9 @@ MIT License; the author describes them as provided for research purposes. Used h
 in a free, non-commercial app with credit.
 https://github.com/adefossez/demucs
 
+Lead/rhythm guitar model — HTDemucs 2-source checkpoint trained by "drypaint" (community), converted to
+Core ML. https://huggingface.co/noblebarkrr/mvsepless_resources
+
 Beat This! (beat tracking model and code) — MIT License
 Copyright (c) 2024 Institute of Computational Perception, JKU Linz (Foscarin, Schlüter, Widmer)
 https://github.com/CPJKU/beat_this

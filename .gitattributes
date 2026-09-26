@@ -4,3 +4,4 @@ Backline/Resources/Fonts/*.ttf filter=lfs diff=lfs merge=lfs -text
 Backline/Resources/BeatThisSmall.mlpackage/** filter=lfs diff=lfs merge=lfs -text
 Vendor/yt-dlp/*.zip filter=lfs diff=lfs merge=lfs -text
 Vendor/quickjs/qjs-* filter=lfs diff=lfs merge=lfs -text
+Backline/Resources/LeadRhythmHTDemucs.mlpackage/** filter=lfs diff=lfs merge=lfs -text
