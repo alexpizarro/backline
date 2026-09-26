@@ -1,0 +1,5 @@
+yt-dlp 2026.08.19 (source 072aad4f2a7604e92155f61a275a4752dc64046c8f6d90df3710525d94cd37c1)
+compiled with Nuitka 4.2.2, CPython 3.13.13, Apple clang version 17.0.0 (clang-1700.6.4.2)
+target arm64, macOS 26.5.2 build host
+deps: certifi==2026.7.22 pycryptodomex==3.23.0 brotli==1.2.0 websockets==17.1 yt-dlp-ejs==0.8.0 requests==2.34.2 urllib3==2.8.0
+output: yt-dlp-native-arm64.zip sha256 79468c94b78d45331196d6b16cac9b325cf0a2eeef764ba610deab8de99d4cb4
