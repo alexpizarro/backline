@@ -1,0 +1,114 @@
+name: Backline
+options:
+  bundleIdPrefix: com.alexpizarro
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+packages:
+  BacklineKit:
+    path: BacklineKit
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.14"
+    CURRENT_PROJECT_VERSION: "14"
+    DEVELOPMENT_TEAM: SBMJ9PMG22
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "Apple Development"
+    ENABLE_HARDENED_RUNTIME: YES
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    DEAD_CODE_STRIPPING: YES
+    ARCHS: arm64
+    EXCLUDED_ARCHS: x86_64
+    ONLY_ACTIVE_ARCH: YES
+  configs:
+    Debug:
+      # Team-signed so the sandboxed yt-dlp helper can inherit Backline's sandbox (inheritance requires
+      # parent and child to share a team identity; ad-hoc signing breaks it).
+      # Anyone building from source: set DEVELOPMENT_TEAM to your own team (Xcode picks your certificate).
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: "Apple Development"
+      DEVELOPMENT_TEAM: SBMJ9PMG22
+    Release:
+      SWIFT_OPTIMIZATION_LEVEL: -O
+      GCC_OPTIMIZATION_LEVEL: 3
+targets:
+  Backline:
+    type: application
+    platform: macOS
+    sources:
+      - path: Backline
+        excludes:
+          - "Resources/Fonts/*.txt"
+      - path: Backline/Resources/Fonts/OFL-PlusJakartaSans.txt
+        buildPhase: resources
+      - path: Backline/Resources/Fonts/OFL-JetBrainsMono.txt
+        buildPhase: resources
+    dependencies:
+      - package: BacklineKit
+        product: BacklineKit
+    postCompileScripts:
+      - name: Embed yt-dlp (YouTube link import)
+        basedOnDependencyAnalysis: false
+        script: "\"${SRCROOT}/scripts/embed-ytdlp.sh\""
+      - name: Embed LAME (LGPL, dynamically loaded)
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          dst="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Frameworks"
+          mkdir -p "$dst"
+          cp -f "${SRCROOT}/Vendor/lame/libmp3lame.0.dylib" "$dst/"
+          cp -f "${SRCROOT}/Vendor/lame/COPYING" "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/LAME-COPYING.txt" 2>/dev/null || true
+          if [ -n "${EXPANDED_CODE_SIGN_IDENTITY}" ]; then
+            codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" --options runtime "$dst/libmp3lame.0.dylib"
+          else
+            codesign --force --sign - "$dst/libmp3lame.0.dylib"
+          fi
+    info:
+      path: Backline/Info.plist
+      properties:
+        CFBundleDisplayName: Backline
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleName: Backline
+        LSApplicationCategoryType: public.app-category.music
+        NSHumanReadableCopyright: "© 2026 Backline. Demucs © Meta (MIT). Signalsmith Stretch © Signalsmith Audio (MIT)."
+        ATSApplicationFontsPath: "."
+        LSMinimumSystemVersion: "26.0"
+        NSMainNibFile: ""
+        NSAudioCaptureUsageDescription: "Backline records a song from another app so it can split it into parts. Recordings stay on your Mac."
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Audio
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.audio
+              - public.mp3
+              - com.microsoft.waveform-audio
+              - public.aiff-audio
+              - public.mpeg-4-audio
+              - org.xiph.flac
+    entitlements:
+      path: Backline/Backline.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.files.user-selected.read-write: true
+        com.apple.security.assets.music.read-write: true
+        com.apple.security.device.audio-input: true
+        com.apple.security.network.client: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.alexpizarro.backline
+        PRODUCT_NAME: Backline
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        COMBINE_HIDPI_IMAGES: YES
+        ENABLE_APP_SANDBOX: YES
+        ENABLE_USER_SELECTED_FILES: readwrite
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.music
+        COREML_CODEGEN_LANGUAGE: None
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
