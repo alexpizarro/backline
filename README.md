@@ -139,7 +139,9 @@ swift test --package-path BacklineKit      # engine and DSP tests
 
 ## Licences
 
-- **Models:** Demucs and Beat This! (MIT).
+- **Models:** Beat This! (code and weights MIT). Demucs: the code is MIT; Meta's pretrained HTDemucs weights
+  are not under MIT and are described by their author as provided for research purposes. Backline is free
+  and non-commercial and credits them.
 - **Audio code:** Signalsmith Stretch and Linear (MIT). LAME (LGPL, loaded as a replaceable library).
 - **YouTube import:** yt-dlp (Unlicense), compiled with Nuitka, with its bundled libraries (certifi MPL-2.0,
   pycryptodomex BSD/Public Domain, Brotli MIT, websockets BSD, requests Apache-2.0, urllib3 MIT, yt-dlp-ejs

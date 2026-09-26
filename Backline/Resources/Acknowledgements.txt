@@ -1,7 +1,9 @@
 Backline includes the following third-party software and models.
 
-Demucs (HTDemucs 6-source model and code) — MIT License
-Copyright (c) Meta Platforms, Inc. and affiliates.
+Demucs — code: MIT License. Copyright (c) Meta Platforms, Inc. and affiliates.
+HTDemucs 6-source model weights: published by Meta with the Demucs project. They are not covered by the
+MIT License; the author describes them as provided for research purposes. Used here, converted to Core ML,
+in a free, non-commercial app with credit.
 https://github.com/adefossez/demucs
 
 Beat This! (beat tracking model and code) — MIT License
