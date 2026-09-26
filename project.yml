@@ -75,7 +75,7 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleName: Backline
         LSApplicationCategoryType: public.app-category.music
-        NSHumanReadableCopyright: "© 2026 Backline. Demucs © Meta (MIT). Signalsmith Stretch © Signalsmith Audio (MIT)."
+        NSHumanReadableCopyright: "© 2026 Backline. Demucs © Meta. Signalsmith Stretch © Signalsmith Audio (MIT)."
         ATSApplicationFontsPath: "."
         LSMinimumSystemVersion: "26.0"
         NSMainNibFile: ""
