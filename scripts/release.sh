@@ -80,6 +80,16 @@ find "$APP/Contents" -type f ! -type l | while read -r f; do
 done
 codesign -dv "$APP" 2>&1 | grep -E "Authority=Developer ID|TeamIdentifier"
 
+echo "▸ Notarizing the app"
+# Notarize and staple the app itself first, so the copy people drag to Applications carries its own
+# ticket (recognised instantly, even offline), then build the DMG around it.
+APPZIP=$(mktemp -u -t backline-app).zip
+ditto -c -k --keepParent "$APP" "$APPZIP"
+xcrun notarytool submit "$APPZIP" --keychain-profile "$PROFILE" --wait | grep -E "status:|id:" | head -2
+rm -f "$APPZIP"
+for i in $(seq 1 12); do xcrun stapler staple "$APP" >/dev/null 2>&1 && break; echo "  staple retry $i"; sleep 30; done
+xcrun stapler validate "$APP" >/dev/null || { echo "✗ app could not be stapled (Apple ticket service); run again later"; exit 1; }
+
 echo "▸ Building DMG"
 # Drag-to-install window: the app on the left, Applications on the right, and a background that says
 # what to do. Built read-write, laid out with Finder, then compressed.
@@ -124,7 +134,9 @@ codesign --sign "Developer ID Application" --timestamp "$DMG"
 
 echo "▸ Notarizing (this takes a few minutes)"
 xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
-xcrun stapler staple "$DMG"
+# Apple's ticket service sometimes drops the connection right after acceptance; retry the staple.
+for i in $(seq 1 12); do xcrun stapler staple "$DMG" >/dev/null 2>&1 && break; echo "  staple retry $i"; sleep 30; done
+xcrun stapler validate "$DMG" >/dev/null || { echo "✗ DMG could not be stapled (Apple ticket service); run again later"; exit 1; }
 spctl --assess --type open --context context:primary-signature -v "$DMG"
 
 echo "✓ $DMG is signed, notarized and stapled — ready to share."

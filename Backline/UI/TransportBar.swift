@@ -347,7 +347,8 @@ private struct PlayGlass: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     func body(content: Content) -> some View {
         if reduceTransparency || GlassSurfaceOverride.forceSolid { content }
-        else { content.glassEffect(.clear.interactive(), in: Circle()) }
+        else if #available(macOS 26.0, *) { content.glassEffect(.clear.interactive(), in: Circle()) }
+        else { content }
     }
 }
 

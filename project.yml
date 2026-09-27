@@ -2,7 +2,7 @@ name: Backline
 options:
   bundleIdPrefix: com.alexpizarro
   deploymentTarget:
-    macOS: "26.0"
+    macOS: "15.0"
   createIntermediateGroups: true
   developmentLanguage: en
 packages:
@@ -11,8 +11,8 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.15"
-    CURRENT_PROJECT_VERSION: "15"
+    MARKETING_VERSION: "0.16"
+    CURRENT_PROJECT_VERSION: "16"
     DEVELOPMENT_TEAM: SBMJ9PMG22
     CODE_SIGN_STYLE: Automatic
     CODE_SIGN_IDENTITY: "Apple Development"
@@ -77,7 +77,7 @@ targets:
         LSApplicationCategoryType: public.app-category.music
         NSHumanReadableCopyright: "© 2026 Backline. Demucs © Meta. Signalsmith Stretch © Signalsmith Audio (MIT)."
         ATSApplicationFontsPath: "."
-        LSMinimumSystemVersion: "26.0"
+        LSMinimumSystemVersion: "15.0"
         NSMainNibFile: ""
         NSAudioCaptureUsageDescription: "Backline records a song from another app so it can split it into parts. Recordings stay on your Mac."
         CFBundleDocumentTypes:

@@ -193,9 +193,13 @@ struct GlassSurface<S: Shape>: ViewModifier {
     func body(content: Content) -> some View {
         if reduceTransparency || GlassSurfaceOverride.forceSolid {
             content.background(shape.fill(fallback))
-        } else {
+        } else if #available(macOS 26.0, *) {
             let glass: Glass = tint.map { Glass.regular.tint($0) } ?? .regular
             content.glassEffect(interactive ? glass.interactive() : glass, in: shape)
+        } else {
+            // macOS 15: frosted material with the same tint.
+            content.background(shape.fill(.ultraThinMaterial))
+                .background(shape.fill((tint ?? fallback).opacity(tint == nil ? 0.55 : 0.35)))
         }
     }
 }
