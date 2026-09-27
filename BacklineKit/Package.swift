@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "BacklineKit",
-    platforms: [.macOS("26.0")],
+    platforms: [.macOS("15.0")],
     products: [
         .library(name: "BacklineKit", targets: ["BacklineKit"]),
         .executable(name: "backline-cli", targets: ["backline-cli"]),

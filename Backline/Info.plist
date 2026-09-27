@@ -45,7 +45,7 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.music</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>26.0</string>
+	<string>15.0</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Backline records a song from another app so it can split it into parts. Recordings stay on your Mac.</string>
 	<key>NSHumanReadableCopyright</key>

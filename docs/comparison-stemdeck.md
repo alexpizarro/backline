@@ -28,7 +28,7 @@ out of a song and learn to play it.
 | **Library** | Recently opened list | Folders, search, tags, favourites, trash |
 | **Mixer** | Faders, on/off, solo | Same, plus level meters |
 | **Practising next to tabs or a DAW** | **Mini player** floating above full-screen apps; single-key shortcuts; PageUp/PageDown for page-turner pedals | About 6 shortcuts; open it on a phone over Wi-Fi via QR code |
-| **Where it runs** | macOS 26 on Apple silicon only | Mac (Intel too, macOS 13+), Windows, Linux, Docker; 11 languages |
+| **Where it runs** | macOS 15 or newer, Apple silicon only | Mac (Intel too, macOS 13+), Windows, Linux, Docker; 11 languages |
 | **Install** | Signed and notarized DMG; opens normally; no extra downloads | Unsigned on Mac (a Terminal command before first launch); downloads ~0.5 GB+ of runtime and models on first launch |
 | **Separation speed** | Core ML on the Apple GPU: a 3:51 song in about 5 s on an M3 Max | PyTorch; in our measurements that path was about 3× slower on the same Mac |
 | **Licence and community** | Free download; source public; one maintainer | Free, open source (Apache-2.0), ~3.9 k GitHub stars, Discord |

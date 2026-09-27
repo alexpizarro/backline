@@ -2,7 +2,7 @@
 
 ## [⬇ Download Backline for Mac](https://github.com/alexpizarro/backline/releases/latest/download/Backline.dmg)
 
-Free. For Macs with Apple silicon (M1 or newer) on macOS 26. Open the file, drag Backline into
+Free. For Macs with Apple silicon (M1 or newer) on macOS 15 Sequoia or newer. Open the file, drag Backline into
 Applications, and you're done.
 
 ---
@@ -16,7 +16,8 @@ then loop, slow down, change the pitch and count in. Save the result as a backin
 
 ## Quick install
 
-**You need:** a Mac with Apple silicon (M1 or newer) running macOS 26, and about 1 GB of free space.
+**You need:** a Mac with Apple silicon (M1 or newer, like a 2022 MacBook Air) running macOS 15 Sequoia,
+macOS 26 Tahoe or macOS 27 Golden Gate, and about 1 GB of free space.
 Nothing else: no Terminal, no extra downloads, no admin password.
 
 **1. Download.** Click **[Download Backline for Mac](https://github.com/alexpizarro/backline/releases/latest/download/Backline.dmg)**.
