@@ -94,6 +94,45 @@ nonisolated enum ImportPipeline {
         let grid = try? await BeatService.shared.tracker()?.track(audio)
         let analysis = Analyzer.analyze(stems: byName, duration: audio.duration, beatGrid: grid ?? nil)
 
+        let folder = store.folder(id)
+        try? FileManager.default.removeItem(at: folder)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        // Keep the original mix (16-bit lossless) so a cleaner model can split the real audio later.
+        let mixTask = Task.detached(priority: .userInitiated) {
+            try writeScaled(audio, to: store.originalURL(id), store: store).1
+        }
+        let processed = try await process(byName, id: id, store: store, isCancelled: isCancelled)
+        let originalScale = try? await mixTask.value
+
+        if let art = meta.artwork { try? art.write(to: store.artworkURL(id)) }
+        let title = meta.title ?? url.deletingPathExtension().lastPathComponent
+            .replacingOccurrences(of: "_", with: " ")
+        let now = Date()
+        let rec = SongRecord(id: id, title: title, artist: meta.artist, duration: audio.duration,
+                             sourceName: url.lastPathComponent, addedAt: now, lastOpened: now,
+                             stems: processed.order, analysis: analysis, peaks: processed.peaks,
+                             storageScale: processed.scales, hasArtwork: meta.artwork != nil, settings: SongSettings(),
+                             guitarSplit: processed.guitarSplit)
+        var saved = rec
+        saved.originalScale = originalScale
+        try store.save(saved)
+        progress(.init(phase: 5, fraction: 1, secondsRemaining: 0))
+        return (saved, processed.all)
+    }
+
+    /// The parts after separation, written to the song's folder.
+    struct Processed: Sendable {
+        var order: [StemKind]
+        var peaks: [String: [Float]]
+        var scales: [String: Float]
+        var guitarSplit: GuitarSplit?
+        var all: [StemKind: StereoAudio]
+    }
+
+    /// Everything after the separator, shared by the first split and the cleaner background pass:
+    /// fold near-silent stems into Other, split lead and rhythm guitar, and write the parts.
+    static func process(_ byName: [String: StereoAudio], id: String, store: SongStore,
+                        isCancelled: @escaping @Sendable () -> Bool) async throws -> Processed {
         // Fold near-silent stems (bleed) into Other so the mixer only shows instruments that are really there.
         func rms(_ a: StereoAudio) -> Float {
             var l: Float = 0, r: Float = 0
@@ -180,9 +219,6 @@ nonisolated enum ImportPipeline {
         let stems = order.map { kinds[$0]! }
 
         // Peaks (shared scale) and lossless stem files, written in parallel.
-        let folder = store.folder(id)
-        try? FileManager.default.removeItem(at: folder)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let results = try await withThrowingTaskGroup(of: (StemKind, [Float], Float).self) { group in
             for (k, s) in zip(order, stems) {
                 group.addTask {
@@ -225,19 +261,9 @@ nonisolated enum ImportPipeline {
             all[.rhythmGuitar] = split.rhythm
         }
 
-        if let art = meta.artwork { try? art.write(to: store.artworkURL(id)) }
-        let title = meta.title ?? url.deletingPathExtension().lastPathComponent
-            .replacingOccurrences(of: "_", with: " ")
-        let now = Date()
-        let rec = SongRecord(id: id, title: title, artist: meta.artist, duration: audio.duration,
-                             sourceName: url.lastPathComponent, addedAt: now, lastOpened: now,
-                             stems: order, analysis: analysis, peaks: peaks, storageScale: scales,
-                             hasArtwork: meta.artwork != nil, settings: SongSettings(), guitarSplit: guitarSplit)
-        try store.save(rec)
-        progress(.init(phase: 5, fraction: 1, secondsRemaining: 0))
-        _ = stems
-        return (rec, all)
+        return Processed(order: order, peaks: peaks, scales: scales, guitarSplit: guitarSplit, all: all)
     }
+
 
     /// Writes a stem at 16-bit with headroom scaling; returns its peaks and the storage gain.
     static func writeScaled(_ s: StereoAudio, to url: URL, store: SongStore) throws -> ([Float], Float) {

@@ -15,17 +15,27 @@ struct StemRow: View {
         let vol = model.settings.volume(kind)
         HStack(spacing: 14) {
             StemToggle(isOn: on, color: kind.color) { model.toggle(kind) }
-                .help(on ? "Remove \(kind.name.lowercased())" : "Bring \(kind.name.lowercased()) back")
-                .accessibilityLabel(kind.name)
+                .help(on ? "Remove \(model.label(kind).lowercased())" : "Bring \(model.label(kind).lowercased()) back")
+                .accessibilityLabel(model.label(kind))
                 .accessibilityValue(on ? "Playing" : "Removed")
 
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
-                    Text(layout == .compact ? kind.shortName : kind.name)
+                    Text(layout == .compact ? model.shortLabel(kind) : model.label(kind))
                         .font(Typo.ui(14, .semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                         .foregroundStyle(on ? Theme.ink : Theme.muted)
+                    if model.mode == .beats, kind == .other, model.musicCanOpen, !model.musicIsOpen {
+                        Button { withAnimation(.smooth(duration: 0.25)) { model.toggleMusicOpen() } } label: {
+                            Image(systemName: "chevron.right.circle.fill")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Theme.primaryTint)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Show the parts in Music: guitars, keys and the rest")
+                        .accessibilityLabel("Show the parts in Music")
+                    }
                     Text("\(index + 1)")
                         .font(Typo.mono(9.5, .medium))
                         .foregroundStyle(Theme.muted.opacity(hover ? 0.9 : 0))
@@ -40,7 +50,7 @@ struct StemRow: View {
             .frame(width: layout == .compact ? 110 : 130, alignment: .leading)
 
             if layout == .compact { Spacer(minLength: 0) } else {
-            StemWaveform(peaks: model.song?.peaks(for: kind) ?? [], color: kind.color, audible: audible, volume: vol)
+            StemWaveform(peaks: model.rowPeaks(kind), color: kind.color, audible: audible, volume: vol)
                 .frame(height: model.stems.count <= 4 ? 48 : 36)
                 .overlay {
                     GeometryReader { g in
@@ -64,7 +74,7 @@ struct StemRow: View {
 
             StemSlider(value: Binding(get: { vol }, set: { model.setVolume(kind, $0) }), tint: kind.color, enabled: audible)
                 .frame(width: 110)
-                .accessibilityLabel("\(kind.name) volume")
+                .accessibilityLabel("\(model.label(kind)) volume")
             Text("\(Int(vol))")
                 .font(Typo.mono(11))
                 .foregroundStyle(Theme.muted)
@@ -85,14 +95,17 @@ struct StemRow: View {
         .animation(.smooth(duration: 0.2), value: on)
         .animation(.smooth(duration: 0.2), value: audible)
         .contextMenu {
-            Button(on ? "Remove \(kind.name)" : "Bring Back \(kind.name)") { model.toggle(kind) }
-            Button(soloed ? "Hear All Parts" : "Hear Only \(kind.name)") { model.toggleSolo(kind) }
+            Button(on ? "Remove \(model.label(kind))" : "Bring Back \(model.label(kind))") { model.toggle(kind) }
+            Button(soloed ? "Hear All Parts" : "Hear Only \(model.label(kind))") { model.toggleSolo(kind) }
             Divider()
             Button("Reset Volume") { model.setVolume(kind, 80) }
         }
     }
 
     func status(on: Bool, audible: Bool) -> String {
+        if kind == .drums, let p = model.drumSplitProgress { return "Splitting the kit · \(Int(p * 100))%" }
+        if kind == .drums, model.mode == .beats, model.downloadingModel == DrumSeparator.modelName,
+           let p = model.modelDownloadProgress { return "Getting the kit model · \(Int(p * 100))%" }
         if model.settings.solo == kind && !on { return "Alone · not saved" }
         if !on { return model.settings.guide && model.settings.solo == nil ? "Guide (quiet)" : "Removed" }
         if !audible { return "Off while S is on" }

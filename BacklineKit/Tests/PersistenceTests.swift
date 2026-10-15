@@ -66,4 +66,40 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(rec.stems, [.guitar, .bass])
         XCTAssertTrue(rec.settings.removed.isEmpty)
     }
+
+    /// 0.17 adds practice modes. A 0.16 build must still read the file, and the new fields round-trip.
+    func testPracticeModeFieldsRoundTripAndStayReadableByOldBuilds() throws {
+        let data = try Data(contentsOf: Self.fixtures.appendingPathComponent("v011_song.json"))
+        var rec = try JSONDecoder().decode(SongRecord.self, from: data)
+        XCTAssertNil(rec.settings.mode)
+        XCTAssertNil(rec.settings.danceStyle)
+        rec.settings.mode = .dance
+        rec.settings.danceStyle = .bachata
+        rec.settings.countOne = 12.5
+        rec.settings.spotlight = .bass
+        rec.settings.removedByMode = ["play": ["leadGuitar"], "beats": ["vocals"]]
+        let out = try JSONEncoder().encode(rec)
+
+        XCTAssertNoThrow(try JSONDecoder().decode(V011Record.self, from: out))
+        let back = try JSONDecoder().decode(SongRecord.self, from: out)
+        XCTAssertEqual(back.settings.mode, .dance)
+        XCTAssertEqual(back.settings.danceStyle, .bachata)
+        XCTAssertEqual(back.settings.countOne, 12.5)
+        XCTAssertEqual(back.settings.spotlight, .bass)
+        XCTAssertEqual(back.settings.removedByMode["beats"], ["vocals"])
+    }
+
+    /// A mode or style from a newer build falls back to nil instead of hiding the song.
+    func testUnknownModeFallsBack() throws {
+        let data = try Data(contentsOf: Self.fixtures.appendingPathComponent("v011_song.json"))
+        var obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        var st = obj["settings"] as! [String: Any]
+        st["mode"] = "karaoke"; st["danceStyle"] = "tango"; st["spotlight"] = "theremin"
+        obj["settings"] = st
+        let rec = try JSONDecoder().decode(SongRecord.self, from: JSONSerialization.data(withJSONObject: obj))
+        XCTAssertNil(rec.settings.mode)
+        XCTAssertNil(rec.settings.danceStyle)
+        XCTAssertNil(rec.settings.spotlight)
+        XCTAssertFalse(rec.stems.isEmpty)
+    }
 }

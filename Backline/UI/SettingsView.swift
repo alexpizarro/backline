@@ -8,6 +8,12 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var signedIn = YouTubeSignIn.isSignedIn
 
+    private var modelStatus: String {
+        if let p = model.modelDownloadProgress { return "Getting them · \(Int(p * 100))%" }
+        let missing = ModelDownloads.missing.count
+        return missing == 0 ? "Ready" : "Next time Backline is online"
+    }
+
     var body: some View {
         Form {
             if YouTubeSignIn.isEnabled {
@@ -33,12 +39,19 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Sharper parts") {
+                LabeledContent("Extra models") { Text(modelStatus).font(.body.weight(.semibold)) }
+                Text("Backline gets two extra models from the internet, one time (about 550 MB). One makes the parts of new songs cleaner. The other splits the drums into kick, snare and hi-hats.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section("My songs") {
                 LabeledContent("Songs") { Text("\(model.library.count)") }
                 HStack {
                     Spacer()
                     Button("Show Folder") {
-                        NSWorkspace.shared.activateFileViewerSelecting([model.store.root])
+                        NSWorkspace.shared.activateFileViewerSelecting([model.store.root.deletingLastPathComponent()])
                     }
                 }
             }

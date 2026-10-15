@@ -7,6 +7,9 @@ import Foundation
 /// Instruments as the app presents them. Data-driven: a song only has the stems the engine produced.
 public enum StemKind: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
     case vocals, leadGuitar, rhythmGuitar, guitar, bass, drums, keys, other
+    /// Drum-kit parts (v0.17), split from the drums part. kick + snare + hats + toms == drums.
+    /// `hats` holds hi-hat and cymbals; `toms` holds toms and the small rest of the kit.
+    case kick, snare, hats, toms
 
     public var id: String { rawValue }
 
@@ -20,6 +23,10 @@ public enum StemKind: String, Codable, CaseIterable, Identifiable, Hashable, Sen
         case .drums: "Drums"
         case .keys: "Keys"
         case .other: "Other"
+        case .kick: "Kick"
+        case .snare: "Snare"
+        case .hats: "Hi-hats"
+        case .toms: "Other drums"
         }
     }
 
@@ -43,6 +50,10 @@ public enum StemKind: String, Codable, CaseIterable, Identifiable, Hashable, Sen
         case .drums: 200
         case .keys: 150
         case .other: 90
+        case .kick: 215
+        case .snare: 190
+        case .hats: 170
+        case .toms: 235
         }
     }
 
@@ -56,6 +67,10 @@ public enum StemKind: String, Codable, CaseIterable, Identifiable, Hashable, Sen
         case .drums: "light.cylindrical.ceiling.fill"
         case .keys: "pianokeys"
         case .other: "sparkles"
+        case .kick: "circle.fill"
+        case .snare: "circle.circle"
+        case .hats: "line.3.horizontal"
+        case .toms: "circle.grid.2x1"
         }
     }
 
@@ -73,12 +88,77 @@ public enum StemKind: String, Codable, CaseIterable, Identifiable, Hashable, Sen
     }
 
     /// Display order in the mixer.
-    public static let displayOrder: [StemKind] = [.vocals, .leadGuitar, .rhythmGuitar, .guitar, .bass, .drums, .keys, .other]
+    public static let displayOrder: [StemKind] = [.vocals, .leadGuitar, .rhythmGuitar, .guitar, .bass, .drums,
+                                                  .kick, .snare, .hats, .toms, .keys, .other]
 
     /// Drums are time-stretched but never transposed (keeps kick/snare natural).
-    public var isPitchLocked: Bool { self == .drums }
+    public var isPitchLocked: Bool { self == .drums || isDrumPart }
+
+    public var isDrumPart: Bool { self == .kick || self == .snare || self == .hats || self == .toms }
+    public static let drumParts: [StemKind] = [.kick, .snare, .hats, .toms]
 
     public var isGuitar: Bool { self == .guitar || self == .leadGuitar || self == .rhythmGuitar }
+
+    /// What the part is called in a practice mode. Dancers know a bachata's lead guitar as the
+    /// requinto and its rhythm guitar as the segunda; everything else keeps its plain name.
+    public func label(in mode: PracticeMode, style: DanceStyle? = nil) -> String {
+        if mode == .beats, self == .other { return "Music" }
+        guard mode == .dance else { return name }
+        switch (self, style ?? .other) {
+        case (.leadGuitar, .bachata): return "Requinto"
+        case (.rhythmGuitar, .bachata): return "Segunda"
+        case (.snare, .bachata): return "Bongó"
+        case (.hats, .bachata): return "Güira"
+        case (.kick, .bachata): return "Bombo"
+        case (.drums, _): return "Percussion"
+        case (.keys, _): return "Piano"
+        case (.other, .salsa): return "Horns"
+        default: return name
+        }
+    }
+
+    /// Short pill label in a practice mode.
+    public func shortLabel(in mode: PracticeMode, style: DanceStyle? = nil) -> String {
+        mode == .play ? shortName : label(in: mode, style: style)
+    }
+}
+
+/// Who is practising. One switch re-dresses the same screen for each kind of user.
+public enum PracticeMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    /// Play an instrument along with the band (take your part out).
+    case play
+    /// Bachata, salsa and other partner dances (hear one instrument, see the counts).
+    case dance
+    /// Rap or sing over the beat (vocals out, loop a few bars).
+    case beats
+
+    public var id: String { rawValue }
+    public var title: String {
+        switch self {
+        case .play: "Play"
+        case .dance: "Dance"
+        case .beats: "Beats"
+        }
+    }
+    public var symbol: String {
+        switch self {
+        case .play: "guitars"
+        case .dance: "figure.dance"
+        case .beats: "music.mic"
+        }
+    }
+}
+
+public enum DanceStyle: String, Codable, CaseIterable, Identifiable, Sendable {
+    case bachata, salsa, other
+    public var id: String { rawValue }
+    public var title: String {
+        switch self {
+        case .bachata: "Bachata"
+        case .salsa: "Salsa"
+        case .other: "Other dance"
+        }
+    }
 }
 
 public enum ExportFormat: String, Codable, CaseIterable, Identifiable, Sendable {
@@ -137,6 +217,14 @@ public struct SongSettings: Codable, Hashable, Sendable {
     public var guide = false                              // removed parts play quietly instead of silent
     public var click = false                              // metronome on the beat grid during playback
     public var showGuitarSplit = true                     // lead/rhythm rows vs a single guitar row
+    // v0.17
+    public var mode: PracticeMode?                        // nil = never opened in 0.17 (use the app's mode)
+    public var danceStyle: DanceStyle?                    // nil = not guessed yet
+    public var countOne: Double?                          // time of a beat that is count 1 (nil = first downbeat)
+    public var spotlight: StemKind?                       // Dance "Listen for": this part loud, the rest quiet
+    /// Parts turned off in the modes that aren't showing (the shown mode's set lives in `removed`).
+    public var removedByMode: [String: [String]] = [:]
+    public var musicOpen = false                          // Beats: Music shown as its separate parts
 
     public init() {}
 
@@ -146,6 +234,7 @@ public struct SongSettings: Codable, Hashable, Sendable {
         case removed, volumes, solo, loopEnabled, loopStart, loopEnd, speed, pitch, countIn, trainer
         case sectionNames, lastPosition, tempoScale, guide, click, showGuitarSplit
         case removedExact, soloExact
+        case mode, danceStyle, countOne, spotlight, removedByMode, musicOpen
     }
 
     public init(from decoder: Decoder) throws {
@@ -172,6 +261,13 @@ public struct SongSettings: Codable, Hashable, Sendable {
         guide = try c.decodeIfPresent(Bool.self, forKey: .guide) ?? false
         click = try c.decodeIfPresent(Bool.self, forKey: .click) ?? false
         showGuitarSplit = try c.decodeIfPresent(Bool.self, forKey: .showGuitarSplit) ?? true
+        // Newer builds may add modes or styles: an unknown value falls back instead of failing the song.
+        mode = (try? c.decodeIfPresent(String.self, forKey: .mode)).flatMap(PracticeMode.init(rawValue:))
+        danceStyle = (try? c.decodeIfPresent(String.self, forKey: .danceStyle)).flatMap(DanceStyle.init(rawValue:))
+        countOne = (try? c.decodeIfPresent(Double.self, forKey: .countOne)) ?? nil
+        spotlight = (try? c.decodeIfPresent(String.self, forKey: .spotlight)).flatMap(StemKind.init(rawValue:))
+        removedByMode = (try? c.decodeIfPresent([String: [String]].self, forKey: .removedByMode)) ?? [:]
+        musicOpen = (try? c.decodeIfPresent(Bool.self, forKey: .musicOpen)) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -197,6 +293,12 @@ public struct SongSettings: Codable, Hashable, Sendable {
         try c.encode(guide, forKey: .guide)
         try c.encode(click, forKey: .click)
         try c.encode(showGuitarSplit, forKey: .showGuitarSplit)
+        try c.encodeIfPresent(mode?.rawValue, forKey: .mode)
+        try c.encodeIfPresent(danceStyle?.rawValue, forKey: .danceStyle)
+        try c.encodeIfPresent(countOne, forKey: .countOne)
+        try c.encodeIfPresent(spotlight?.rawValue, forKey: .spotlight)
+        if !removedByMode.isEmpty { try c.encode(removedByMode, forKey: .removedByMode) }
+        if musicOpen { try c.encode(musicOpen, forKey: .musicOpen) }
     }
 }
 
@@ -240,6 +342,28 @@ public struct GuitarSplit: Codable, Hashable, Sendable {
     }
 }
 
+/// Kick / snare / hats / toms split of the drums part (v0.17), stored beside drums.caf so older
+/// builds keep working. The four parts add back to the drums part exactly.
+public struct DrumSplit: Codable, Hashable, Sendable {
+    public var method: String                      // e.g. "mdx23c-drumsep-5"
+    public var peaks: [String: [Float]]            // StemKind.rawValue → peaks
+    public var scales: [String: Float]             // 16-bit storage gain per part (undone on load)
+    public var energy: [String: Float] = [:]       // mean square per part, to hide parts a song barely uses
+
+    public init(method: String, peaks: [String: [Float]], scales: [String: Float], energy: [String: Float] = [:]) {
+        self.method = method; self.peaks = peaks; self.scales = scales; self.energy = energy
+    }
+
+    enum CodingKeys: String, CodingKey { case method, peaks, scales, energy }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        method = try c.decodeIfPresent(String.self, forKey: .method) ?? "unknown"
+        peaks = try c.decodeIfPresent([String: [Float]].self, forKey: .peaks) ?? [:]
+        scales = try c.decodeIfPresent([String: Float].self, forKey: .scales) ?? [:]
+        energy = try c.decodeIfPresent([String: Float].self, forKey: .energy) ?? [:]
+    }
+}
+
 /// A separated song in the library.
 public struct SongRecord: Codable, Identifiable, Equatable, Sendable {
     public var id: String                                 // content hash
@@ -259,6 +383,10 @@ public struct SongRecord: Codable, Identifiable, Equatable, Sendable {
     // v0.12
     public var guitarSplit: GuitarSplit?                  // present when lead.caf / rhythm.caf exist
     public var bpmOverride: Double?                       // user-corrected tempo, if any
+    // v0.17
+    public var drumSplit: DrumSplit?                      // present when kick/snare/hats/toms.caf exist
+    public var originalScale: Float?                      // present when original.caf (the mix) is kept
+    public var separator: String?                         // nil = HTDemucs 6s; "bs-roformer-sw" after the cleaner pass
 
     public init(id: String, title: String, artist: String?, duration: Double, sourceName: String,
                 addedAt: Date, lastOpened: Date, stems: [StemKind], analysis: SongAnalysis,
@@ -278,6 +406,15 @@ public struct SongRecord: Codable, Identifiable, Equatable, Sendable {
         guard splitActive else { return stems }
         return stems.flatMap { $0 == .guitar ? [StemKind.leadGuitar, .rhythmGuitar] : [$0] }
     }
+
+    /// Tracks loaded in the engine: the mix tracks, with drums replaced by its kit parts once split.
+    /// What the screen shows (and how parts group into rows) depends on the practice mode.
+    public var engineTracks: [StemKind] {
+        guard drumSplitActive else { return mixStems }
+        return mixStems.flatMap { $0 == .drums ? StemKind.drumParts : [$0] }
+    }
+
+    public var drumSplitActive: Bool { drumSplit != nil && stems.contains(.drums) }
 
     /// File name stem for a stored stem (`lead` / `rhythm` for the split parts).
     public static func fileStem(_ k: StemKind) -> String {
@@ -302,6 +439,7 @@ public struct SongRecord: Codable, Identifiable, Equatable, Sendable {
         switch k {
         case .leadGuitar: guitarSplit?.leadScale ?? 1
         case .rhythmGuitar: guitarSplit?.rhythmScale ?? 1
+        case .kick, .snare, .hats, .toms: drumSplit?.scales[k.rawValue] ?? 1
         case .other where splitActive && guitarSplit?.otherAdjusted == true: guitarSplit?.otherScale ?? 1
         default: storageScale[k.rawValue] ?? 1
         }
@@ -311,6 +449,7 @@ public struct SongRecord: Codable, Identifiable, Equatable, Sendable {
         switch k {
         case .leadGuitar: guitarSplit?.leadPeaks ?? []
         case .rhythmGuitar: guitarSplit?.rhythmPeaks ?? []
+        case .kick, .snare, .hats, .toms: drumSplit?.peaks[k.rawValue] ?? []
         case .other where splitActive && guitarSplit?.otherAdjusted == true: guitarSplit?.otherPeaks ?? []
         default: peaks[k.rawValue] ?? []
         }
@@ -318,7 +457,7 @@ public struct SongRecord: Codable, Identifiable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, title, artist, duration, sourceName, addedAt, lastOpened, stems, analysis, peaks
-        case storageScale, hasArtwork, settings, guitarSplit, bpmOverride
+        case storageScale, hasArtwork, settings, guitarSplit, bpmOverride, drumSplit, originalScale, separator
     }
 
     public init(from decoder: Decoder) throws {
@@ -339,6 +478,9 @@ public struct SongRecord: Codable, Identifiable, Equatable, Sendable {
         settings = (try? c.decodeIfPresent(SongSettings.self, forKey: .settings)) ?? SongSettings()
         guitarSplit = try? c.decodeIfPresent(GuitarSplit.self, forKey: .guitarSplit)
         bpmOverride = try c.decodeIfPresent(Double.self, forKey: .bpmOverride)
+        drumSplit = try? c.decodeIfPresent(DrumSplit.self, forKey: .drumSplit)
+        originalScale = try? c.decodeIfPresent(Float.self, forKey: .originalScale)
+        separator = try? c.decodeIfPresent(String.self, forKey: .separator)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -358,6 +500,9 @@ public struct SongRecord: Codable, Identifiable, Equatable, Sendable {
         try c.encode(settings, forKey: .settings)
         try c.encodeIfPresent(guitarSplit, forKey: .guitarSplit)
         try c.encodeIfPresent(bpmOverride, forKey: .bpmOverride)
+        try c.encodeIfPresent(drumSplit, forKey: .drumSplit)
+        try c.encodeIfPresent(originalScale, forKey: .originalScale)
+        try c.encodeIfPresent(separator, forKey: .separator)
     }
 }
 

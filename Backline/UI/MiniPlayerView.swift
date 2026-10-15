@@ -53,7 +53,7 @@ struct MiniPlayerView: View {
                     .font(Typo.mono(11))
                 }
                 Spacer(minLength: 6)
-                PlayButton(isPlaying: model.isPlaying, countInBeat: model.countInBeat) { model.togglePlay() }
+                PlayButton(isPlaying: model.isPlaying, countInBeat: model.countInLabel) { model.togglePlay() }
                     .scaleEffect(0.86)
                 expandButton
             }
@@ -63,31 +63,37 @@ struct MiniPlayerView: View {
 
             HStack(spacing: 8) {
                 LoopChip(compact: true)
-                ABButton(compact: true)
+                if model.mode == .play { ABButton(compact: true) }
                 MiniStepper(label: "\(model.settings.trainer.enabled && model.settings.loopEnabled ? model.liveSpeed : model.settings.speed)%",
                             symbol: "tortoise", highlighted: model.settings.speed != 100,
                             down: { model.stepSpeed(-1) }, up: { model.stepSpeed(1) })
                     .help("Speed · ⌘← ⌘→")
-                MiniStepper(label: formatPitch(model.settings.pitch), symbol: "tuningfork",
-                            highlighted: model.settings.pitch != 0,
-                            down: { model.stepPitch(-1) }, up: { model.stepPitch(1) })
-                    .help("Pitch · ⌘↓ ⌘↑")
+                if model.mode != .dance {
+                    MiniStepper(label: formatPitch(model.settings.pitch), symbol: "tuningfork",
+                                highlighted: model.settings.pitch != 0,
+                                down: { model.stepPitch(-1) }, up: { model.stepPitch(1) })
+                        .help("Pitch · ⌘↓ ⌘↑")
+                }
                 Spacer(minLength: 0)
             }
 
             HStack(spacing: 5) {
-                Text("I'm playing").font(Typo.ui(11, .semibold)).foregroundStyle(Theme.muted)
-                ForEach(model.stems.filter { $0 != .other && $0 != .keys }) { k in
-                    let active = model.playingStem == k
-                    Button { model.choosePlaying(k) } label: {
-                        Text(k.shortName)
-                            .font(Typo.ui(11, .semibold))
-                            .foregroundStyle(active ? Theme.magentaText : Theme.ink2)
-                            .padding(.vertical, 4).padding(.horizontal, 9)
-                            .background(Capsule().fill(active ? Theme.magenta.opacity(0.18) : Color.white.opacity(0.06)))
-                            .overlay(Capsule().strokeBorder(active ? Theme.magenta.opacity(0.6) : Color.white.opacity(0.08)))
+                switch model.mode {
+                case .play:
+                    Text("I'm playing").font(Typo.ui(11, .semibold)).foregroundStyle(Theme.muted)
+                    ForEach(model.stems.filter { $0 != .other && $0 != .keys }) { k in
+                        MiniPill(title: k.shortName, active: model.playingStem == k) { model.choosePlaying(k) }
                     }
-                    .buttonStyle(.plain)
+                case .dance:
+                    Text("Listen for").font(Typo.ui(11, .semibold)).foregroundStyle(Theme.muted)
+                    ForEach(model.danceListenParts.prefix(5)) { k in
+                        MiniPill(title: model.shortLabel(k), active: model.settings.spotlight == k) { model.toggleSpotlight(k) }
+                    }
+                case .beats:
+                    Text("Loop").font(Typo.ui(11, .semibold)).foregroundStyle(Theme.muted)
+                    ForEach([1, 2, 4, 8], id: \.self) { n in
+                        MiniPill(title: n == 1 ? "1 bar" : "\(n) bars", active: model.loopBarCount == n) { model.loopBars(n) }
+                    }
                 }
                 Spacer(minLength: 0)
             }
@@ -156,5 +162,22 @@ struct MiniWaveform: View {
                 .onChanged { v in model.isScrubbing = true; model.seek(to: Double(max(0, min(w, v.location.x)) / w) * dur) }
                 .onEnded { _ in model.isScrubbing = false })
         }
+    }
+}
+
+struct MiniPill: View {
+    let title: String
+    let active: Bool
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(Typo.ui(11, .semibold))
+                .foregroundStyle(active ? Theme.magentaText : Theme.ink2)
+                .padding(.vertical, 4).padding(.horizontal, 9)
+                .background(Capsule().fill(active ? Theme.magenta.opacity(0.18) : Color.white.opacity(0.06)))
+                .overlay(Capsule().strokeBorder(active ? Theme.magenta.opacity(0.6) : Color.white.opacity(0.08)))
+        }
+        .buttonStyle(.plain)
     }
 }

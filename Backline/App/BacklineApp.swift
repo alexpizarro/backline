@@ -160,10 +160,10 @@ struct BacklineCommands: Commands {
         }
         CommandMenu("Parts") {
             ForEach(Array(model.stems.enumerated()), id: \.element) { i, k in
-                Button("\(model.isOn(k) ? "Remove" : "Bring Back") \(k.name)      \(i + 1)") { model.toggle(k) }
+                Button("\(model.isOn(k) ? "Remove" : "Bring Back") \(model.label(k))      \(i + 1)") { model.toggle(k) }
             }
             Divider()
-            Button("Hear All Parts       R") { model.settings.removed = []; model.settings.solo = nil }
+            Button("Hear All Parts       R") { model.settings.removed = []; model.settings.solo = nil; model.settings.spotlight = nil }
                 .disabled(model.song == nil)
         }
         CommandGroup(after: .windowArrangement) {
@@ -173,6 +173,11 @@ struct BacklineCommands: Commands {
             HelpMenuItems(model: model)
         }
         CommandGroup(after: .sidebar) {
+            ForEach(Array(PracticeMode.allCases.enumerated()), id: \.element) { i, m in
+                Toggle(m.title, isOn: Binding(get: { model.mode == m }, set: { _ in model.setMode(m) }))
+                    .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)
+            }
+            Divider()
             Button(model.showSidebar ? "Hide Library" : "Show Library") {
                 withAnimation(.smooth(duration: 0.3)) { model.showSidebar.toggle() }
             }
@@ -189,7 +194,7 @@ struct HelpMenuItems: View {
         Button("Backline Help") { model.helpTopic = .start; openWindow(id: "help") }
             .keyboardShortcut("?", modifiers: .command)
         Divider()
-        ForEach([HelpTopic.removeLead, .practice, .youtube, .record, .troubleshooting], id: \.self) { t in
+        ForEach([HelpTopic.removeLead, .practice, .dance, .beats, .youtube, .record, .troubleshooting], id: \.self) { t in
             Button(HelpContent.page(t).title) { model.helpTopic = t; openWindow(id: "help") }
         }
         Divider()

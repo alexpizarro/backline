@@ -23,6 +23,95 @@ enum Snapshotter {
     static var openWindow: ((String) -> Void)?
     static var dismissWindow: ((String) -> Void)?
 
+    /// Verifies the practice modes on a real song: one screenshot per mode, a dance session (Listen for,
+    /// an 8-count loop, counts while playing) and a Beats bar loop. The song's settings are put back after.
+    static func modeShots(model: AppModel, rec: SongRecord, dir: URL) async {
+        let originalMode = model.appMode
+        model.select(rec)
+        var waited = 0.0
+        while model.song?.id != rec.id && waited < 30 { try? await Task.sleep(for: .seconds(0.2)); waited += 0.2 }
+        try? await Task.sleep(for: .seconds(1.0))
+        let saved = model.settings
+        var log = "song=\(rec.title) bpm=\(rec.analysis.bpm) stems=\(model.stems.map(\.rawValue))\n"
+
+        // Seek before the first Play must stick (it used to snap back to 0:00).
+        model.seek(to: 60)
+        try? await Task.sleep(for: .seconds(0.5))
+        log += String(format: "seekBeforePlay: asked 60.0, shows %.2f\n", model.position)
+
+        for m in PracticeMode.allCases {
+            model.setMode(m)
+            try? await Task.sleep(for: .seconds(0.8))
+            capture(dir.appendingPathComponent("mode-\(m.rawValue).png"))
+            log += "\(m.rawValue): removed=\(model.settings.removed.map(\.rawValue).sorted()) style=\(model.settings.danceStyle?.rawValue ?? "-") tempoScale=\(model.settings.tempoScale) labels=\(model.stems.map { model.label($0) })\n"
+        }
+
+        model.setMode(.dance)
+        model.settings.countIn = false
+        model.seek(to: 60)
+        if let k = model.danceListenParts.first { model.toggleSpotlight(k) }
+        model.clearOne()
+        try? await Task.sleep(for: .seconds(0.4))
+        capture(dir.appendingPathComponent("dance-tap-prompt.png"))
+        model.setOneHere()
+        model.loopCounts(8)
+        model.togglePlay()
+        try? await Task.sleep(for: .seconds(2.2))
+        capture(dir.appendingPathComponent("dance-playing.png"))
+        log += "dance: count=\(model.currentCount.map(String.init) ?? "-") loopCounts=\(model.loopCountLength.map(String.init) ?? "-") spotlight=\(model.settings.spotlight?.rawValue ?? "-") gains=\(model.stems.map { String(format: "%.2f", model.trackGain($0)) })\n"
+        model.togglePlay()
+
+        model.setMode(.beats)
+        model.seek(to: 75)
+        model.loopBars(2)
+        try? await Task.sleep(for: .seconds(0.6))
+        capture(dir.appendingPathComponent("beats-loop.png"))
+        if model.musicCanOpen {
+            model.toggleMusicOpen()
+            try? await Task.sleep(for: .seconds(0.6))
+            capture(dir.appendingPathComponent("beats-music-open.png"))
+            log += "beats music open rows=\(model.rows.map { model.label($0.kind) })\n"
+            model.toggleMusicOpen()
+        }
+        log += String(format: "beats: loopBars=%@ loop=%.2f-%.2f\n", model.loopBarCount.map(String.init) ?? "-",
+                      model.loopRange?.lowerBound ?? -1, model.loopRange?.upperBound ?? -1)
+
+        if CommandLine.arguments.contains("--wait-drums") {
+            // Beats asks for the kit parts; wait for the background split and the engine reload.
+            model.setMode(.beats)
+            let t0 = Date()
+            var w = 0.0
+            while (model.song?.drumSplit == nil || !model.loadedTracks.contains(.kick)) && w < 300 {
+                try? await Task.sleep(for: .seconds(0.5)); w += 0.5
+                if Int(w * 2) % 20 == 0, let p = model.drumSplitProgress { log += String(format: "  split %.0f%% at %.0fs\n", p * 100, w) }
+            }
+            log += String(format: "drum split: %@ in %.1fs; engine tracks=%@\n", model.song?.drumSplit?.method ?? "none",
+                          Date().timeIntervalSince(t0), model.loadedTracks.map(\.rawValue).description)
+            log += "beats rows=\(model.rows.map { "\(model.label($0.kind))[\($0.leaves.map(\.rawValue).joined(separator: "+"))]" })\n"
+            try? await Task.sleep(for: .seconds(0.8))
+            capture(dir.appendingPathComponent("beats-kit.png"))
+            model.loopBars(2)
+            model.settings.countIn = false
+            model.toggle(.kick)
+            model.togglePlay()
+            try? await Task.sleep(for: .seconds(1.5))
+            log += "beats play (kick off): position=\(String(format: "%.2f", model.position)) gains=\(model.exportGains().map { String(format: "%.2f", $0) })\n"
+            model.togglePlay()
+            model.setMode(.dance)
+            model.setDanceStyle(.bachata)
+            log += "dance bachata rows=\(model.rows.map { "\(model.label($0.kind))[\($0.leaves.map(\.rawValue).joined(separator: "+"))]" })\n"
+            try? await Task.sleep(for: .seconds(0.6))
+            capture(dir.appendingPathComponent("dance-kit.png"))
+            model.setMode(.play)
+            log += "play rows=\(model.rows.map { "\(model.label($0.kind))[\($0.leaves.map(\.rawValue).joined(separator: "+"))]" })\n"
+        }
+
+        model.settings = saved
+        model.appMode = originalMode
+        model.persistCurrent(synchronously: true)
+        try? log.write(to: dir.appendingPathComponent("modes.txt"), atomically: true, encoding: .utf8)
+    }
+
     static func run(model: AppModel) {
         guard let dir = outputDir else { return }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -179,6 +268,27 @@ enum Snapshotter {
                 }
             }
             capture(dir.appendingPathComponent("1-empty.png"))
+            // --wait-models: let the background model downloads run, then report what got installed.
+            if CommandLine.arguments.contains("--wait-models") {
+                let t0 = Date()
+                try? await Task.sleep(for: .seconds(6))
+                while model.modelDownloadTask != nil && Date().timeIntervalSince(t0) < 900 {
+                    try? await Task.sleep(for: .seconds(1))
+                }
+                let installed = ModelDownloads.assets.filter(ModelDownloads.isInstalled).map(\.name)
+                try? String(format: "installed=%@ missing=%@ after %.1fs\n", installed.description,
+                            ModelDownloads.missing.map(\.name).description, Date().timeIntervalSince(t0))
+                    .write(to: dir.appendingPathComponent("models.txt"), atomically: true, encoding: .utf8)
+                NSApp.terminate(nil)
+                return
+            }
+            // --open-title <text> --modes: a library song in Play, Dance and Beats (settings restored after).
+            if let i = CommandLine.arguments.firstIndex(of: "--open-title"), i + 1 < CommandLine.arguments.count,
+               let rec = model.library.first(where: { $0.title.localizedCaseInsensitiveContains(CommandLine.arguments[i + 1]) }) {
+                await modeShots(model: model, rec: rec, dir: dir)
+                NSApp.terminate(nil)
+                return
+            }
             if let i = CommandLine.arguments.firstIndex(of: "--youtube"), i + 1 < CommandLine.arguments.count,
                let video = YouTubeImport.parse(CommandLine.arguments[i + 1]) {
                 model.openYouTube(video)
@@ -212,6 +322,29 @@ enum Snapshotter {
                 }
                 try? await Task.sleep(for: .seconds(1.0))
                 capture(dir.appendingPathComponent("3-mixer.png"))
+                if CommandLine.arguments.contains("--wait-hq") {
+                    // The cleaner pass runs after the song opens; wait for it, then for the drum kit in Beats.
+                    var log = "opened: separator=\(model.song?.separator ?? "htdemucs") original=\(model.song?.originalScale != nil) stems=\(model.stems.map(\.rawValue))\n"
+                    let t0 = Date()
+                    while (model.song?.separator == nil || model.pendingRecord != nil) && Date().timeIntervalSince(t0) < 900 {
+                        try? await Task.sleep(for: .seconds(1))
+                        if let p = model.hqProgress, Int(Date().timeIntervalSince(t0)) % 15 == 0 { log += String(format: "  cleaner %.0f%% at %.0fs\n", p * 100, Date().timeIntervalSince(t0)) }
+                    }
+                    log += String(format: "cleaner parts: %@ in %.1fs, stems=%@ split=%@\n", model.song?.separator ?? "none",
+                                  Date().timeIntervalSince(t0), model.stems.map(\.rawValue).description, model.song?.guitarSplit?.method ?? "-")
+                    capture(dir.appendingPathComponent("3b-cleaner.png"))
+                    model.setMode(.beats)
+                    let t1 = Date()
+                    while model.song?.drumSplit == nil || !model.loadedTracks.contains(.kick) {
+                        if Date().timeIntervalSince(t1) > 600 { break }
+                        try? await Task.sleep(for: .seconds(1))
+                    }
+                    log += String(format: "drum kit: %@ in %.1fs, rows=%@\n", model.song?.drumSplit?.method ?? "none",
+                                  Date().timeIntervalSince(t1), model.rows.map { model.label($0.kind) }.description)
+                    capture(dir.appendingPathComponent("3c-beats.png"))
+                    model.setMode(.play)
+                    try? log.write(to: dir.appendingPathComponent("hq.txt"), atomically: true, encoding: .utf8)
+                }
                 if CommandLine.arguments.contains("--countin") {
                     model.settings.countIn = true
                     model.togglePlay()
@@ -250,9 +383,7 @@ enum Snapshotter {
                         let outDir = dir.appendingPathComponent("elsewhere", isDirectory: true)
                         try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
                         let url = outDir.appendingPathComponent("export-test.\(fmt.fileExtension)")
-                        let gains: [Float] = model.stems.map { k in
-                            model.isAudible(k) ? AppModel.gain(forVolume: model.settings.volume(k)) / max(song.storageScale[k.rawValue] ?? 1, 1e-6) : 0
-                        }
+                        let gains = model.exportGains()
                         let job = ExportJob(settings: .init(gains: gains, rate: 0.8, semitones: -1), format: fmt,
                                             url: url, title: song.title, artist: song.artist)
                         let engine = model.engine

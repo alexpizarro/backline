@@ -7,8 +7,13 @@ struct OverviewCard: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            SectionStrip()
-                .frame(height: 22)
+            Group {
+                switch model.mode {
+                case .play: SectionStrip()
+                case .dance, .beats: CountStrip()
+                }
+            }
+            .frame(height: 22)
             OverviewWaveform()
                 .frame(height: 70)
         }
@@ -104,7 +109,7 @@ struct OverviewWaveform: View {
     @State private var dragMode: DragMode?
     @State private var hoverX: CGFloat?
 
-    enum DragMode { case scrub, loopStart, loopEnd, newLoop(Double) }
+    enum DragMode { case scrub, loopStart, loopEnd, newLoop(Double), barPending(Double) }
 
     var body: some View {
         GeometryReader { geo in
@@ -123,6 +128,8 @@ struct OverviewWaveform: View {
                         .offset(x: x0, y: -4)
                         .transition(.opacity)
                 }
+                GridLines(times: model.gridLines, duration: dur, emphasise: model.mode == .dance)
+                    .allowsHitTesting(false)
                 WaveformBars(bars: bars, progress: model.position / dur)
                     .animation(.smooth(duration: 0.25), value: bars)
                 // Hover time readout
@@ -173,6 +180,8 @@ struct OverviewWaveform: View {
                         dragMode = .loopStart
                     } else if model.settings.loopEnabled, let r = model.loopRange, abs(startT - r.upperBound) < tol {
                         dragMode = .loopEnd
+                    } else if model.mode == .beats {
+                        dragMode = .barPending(startT)
                     } else if NSEvent.modifierFlags.contains(.option) {
                         dragMode = .newLoop(model.snapToBeat(startT))
                     } else {
@@ -182,20 +191,136 @@ struct OverviewWaveform: View {
                 switch dragMode {
                 case .scrub: model.isScrubbing = true; model.seek(to: t)
                 case .loopStart:
-                    if let r = model.loopRange { model.setLoop(start: model.snapToBeat(min(t, r.upperBound - 0.5)), end: r.upperBound) }
+                    if let r = model.loopRange { model.setLoop(start: snap(min(t, r.upperBound - 0.5)), end: r.upperBound) }
                 case .loopEnd:
-                    if let r = model.loopRange { model.setLoop(start: r.lowerBound, end: model.snapToBeat(max(t, r.lowerBound + 0.5))) }
+                    if let r = model.loopRange { model.setLoop(start: r.lowerBound, end: snap(max(t, r.lowerBound + 0.5))) }
+                case .barPending(let start):
+                    // Beats: a real drag (not a click) becomes a loop from bar line to bar line.
+                    if abs(v.location.x - v.startLocation.x) > 6 {
+                        dragMode = .newLoop(model.snapToBarLine(start))
+                    }
                 case .newLoop(let a):
-                    let b = model.snapToBeat(t)
+                    let b = snap(t)
                     if abs(b - a) > 0.5 { model.setLoop(start: min(a, b), end: max(a, b)) }
                 case .none: break
                 }
             }
-            .onEnded { _ in
+            .onEnded { v in
+                if case .barPending = dragMode {
+                    model.seek(to: Double(max(0, min(width, v.location.x)) / width) * dur)
+                }
                 if case .newLoop = dragMode, let r = model.loopRange { model.seek(to: r.lowerBound) }
                 model.isScrubbing = false
                 dragMode = nil
             }
+    }
+}
+
+extension OverviewWaveform {
+    /// Loop edges snap to bar lines in Beats and to beats elsewhere.
+    func snap(_ t: Double) -> Double { model.mode == .beats ? model.snapToBarLine(t) : model.snapToBeat(t) }
+}
+
+/// Thin lines on the waveform: every eight (Dance) or every bar (Beats).
+struct GridLines: View {
+    let times: [Double]
+    let duration: Double
+    var emphasise = false
+
+    var body: some View {
+        Canvas { ctx, size in
+            guard !times.isEmpty, duration > 0 else { return }
+            // Keep at least 5 px between lines: skip some when zoomed out.
+            let minGap: CGFloat = 5
+            var lastX: CGFloat = -.infinity
+            var path = Path()
+            for t in times {
+                let x = size.width * t / duration
+                guard x - lastX >= minGap else { continue }
+                path.addRect(CGRect(x: x, y: 0, width: 1, height: size.height))
+                lastX = x
+            }
+            ctx.fill(path, with: .color(Color.white.opacity(emphasise ? 0.10 : 0.07)))
+        }
+    }
+}
+
+/// Dance counts 1 to 8, Beats counts the 4 beats of a bar. Nothing moves until the person has tapped on
+/// the 1 (a wrong machine guess was confusing): until then the strip is one clear button.
+struct CountStrip: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if model.countsConfirmed { counts } else { tapPrompt }
+    }
+
+    private var tapPrompt: some View {
+        HStack(spacing: 10) {
+            Button { model.setOneHere() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "hand.tap.fill").font(.system(size: 11, weight: .bold))
+                    Text("Tap on the 1").font(Typo.ui(12, .bold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .frame(height: 22)
+                .background(Capsule().fill(Theme.magenta))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Play the song. Click this (or press O) when you hear the 1. Then the counts start.")
+            .accessibilityLabel("Tap on the 1")
+            Text(model.isPlaying ? "Click it when you hear the 1, or press O" : "Play the song, then click it on the 1")
+                .font(Typo.ui(11.5))
+                .foregroundStyle(Theme.muted)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var counts: some View {
+        let current = model.currentCount
+        let n = model.countsPerCycle
+        return HStack(spacing: 4) {
+            if model.mode == .beats, let bar = model.currentBar {
+                Text("Bar \(bar)")
+                    .font(Typo.mono(11, .semibold))
+                    .foregroundStyle(Theme.ink2)
+                    .frame(width: 58, alignment: .leading)
+                    .contentTransition(.numericText())
+            }
+            ForEach(1...n, id: \.self) { i in
+                let on = current == i
+                Text("\(i)")
+                    .font(Typo.mono(12, .semibold))
+                    .foregroundStyle(on ? .white : (i == 1 ? Theme.magentaText : Theme.muted))
+                    .frame(width: 26, height: 22)
+                    .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(on ? (i == 1 ? Theme.magenta : Theme.primary) : Theme.card))
+                    .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(Theme.hairline2))
+                    .animation(.easeOut(duration: 0.08), value: on)
+            }
+            Spacer(minLength: 8)
+            Menu {
+                Button("Set the 1 here  O") { model.setOneHere() }
+                if model.mode == .dance { Button("Move the 1 by 4 counts") { model.moveOne(by: 4) } }
+                Divider()
+                Button("Clear the 1") { model.clearOne() }
+            } label: {
+                Label("The 1", systemImage: "hand.tap")
+                    .labelStyle(.titleAndIcon)
+                    .font(Typo.ui(11.5, .semibold))
+            } primaryAction: {
+                model.setOneHere()
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.primaryTint)
+            .fixedSize()
+            .help("Click to set the 1 again where you are now (or press O). Hold for more.")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(current.map { "Count \($0)" } ?? "Counts")
     }
 }
 

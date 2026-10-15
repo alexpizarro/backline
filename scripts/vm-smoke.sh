@@ -3,6 +3,7 @@
 #   download → first-launch "Open" prompt → add a song → split (incl. lead/rhythm) → save a backing track,
 #   plus the bundled YouTube downloader on that macOS version.
 #   scripts/vm-smoke.sh <tart image> <dmg> <song.mp3>
+#   VM_NO_QUARANTINE=1 skips the Gatekeeper download flag (only for testing a DMG that isn't notarized yet).
 # The throwaway VM images log in as admin/admin and let the script click buttons like a user would.
 set -uo pipefail
 IMG=$1; DMG=$2; SONG=$3
@@ -10,10 +11,11 @@ TART=${TART:-$HOME/.local/tools/tart/tart.app/Contents/MacOS/tart}
 VM="backline-test-$(basename "$IMG" | tr ':/' '--')"
 SHARE=$(mktemp -d)
 cp "$DMG" "$SHARE/Backline.dmg"; cp "$SONG" "$SHARE/song.mp3"
+echo "${VM_NO_QUARANTINE:-0}" > "$SHARE/no-quarantine"
 
 "$TART" delete "$VM" >/dev/null 2>&1
 "$TART" clone "$IMG" "$VM" || exit 1
-"$TART" set "$VM" --cpu 4 --memory 8192 >/dev/null
+"$TART" set "$VM" --cpu ${VM_CPU:-6} --memory ${VM_MEMORY:-8192} >/dev/null
 "$TART" run "$VM" --no-graphics --dir=share:"$SHARE" >/dev/null 2>&1 &
 RUN=$!
 for i in {1..90}; do IP=$("$TART" ip "$VM" 2>/dev/null) && [ -n "$IP" ] && break; sleep 2; done
@@ -33,7 +35,7 @@ echo "macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
 # 1. Install like a user: open the DMG, copy the app, keep the browser's quarantine flag.
 M=$(hdiutil attach -nobrowse -readonly "$S/Backline.dmg" | awk -F'\t' '/Volumes/{print $NF}')
 ditto "$M/Backline.app" /Applications/Backline.app
-xattr -w com.apple.quarantine "0081;$(printf %x $(date +%s));Safari;$(uuidgen)" /Applications/Backline.app
+[ "$(cat "$S/no-quarantine")" = 1 ] || xattr -w com.apple.quarantine "0081;$(printf %x $(date +%s));Safari;$(uuidgen)" /Applications/Backline.app
 hdiutil detach "$M" -quiet
 echo "gatekeeper: $(spctl --assess --type execute -v /Applications/Backline.app 2>&1 | head -2 | tr '\n' ' ')"
 
@@ -48,7 +50,7 @@ done
 sleep 8
 pgrep -x Backline >/dev/null && echo "launch: OK" || echo "launch: FAILED"
 echo "windows: $(ui 'get name of every window of process "Backline"')"
-for i in 1 2 3; do ui 'keystroke return' >/dev/null; sleep 0.6; done   # welcome cards
+for i in 1 2 3 4 5; do ui 'keystroke return' >/dev/null; sleep 0.6; done   # welcome: "What do you practise?" + 3 cards
 ui 'key code 53' >/dev/null
 
 # 3. Add a song (same path as dragging a file onto Backline).
@@ -88,6 +90,26 @@ if [ "$(ls "$SONGS"/*/song.json 2>/dev/null | wc -l | tr -d ' ')" -gt "$before" 
 else
   echo "youtube: FAILED — screen says: $(ui 'get value of every static text of window 1 of process "Backline"' | cut -c1-240)"
 fi
+
+# 6. 0.17: the extra models download by themselves, the cleaner pass re-splits the YouTube song, Beats
+#    splits its drum kit, and Dance remembers the 1.
+MODELS="$HOME/Library/Containers/com.alexpizarro.backline/Data/Library/Application Support/Backline/Models"
+t0=$(date +%s)
+for i in $(seq 1 240); do [ "$(ls "$MODELS"/*.sha256 2>/dev/null | wc -l | tr -d ' ')" -ge 2 ] && break; sleep 5; done
+echo "models: $(ls "$MODELS"/*.sha256 2>/dev/null | wc -l | tr -d ' ') of 2 in $(( $(date +%s) - t0 ))s ($(du -sh "$MODELS" 2>/dev/null | cut -f1))"
+J=$(ls -t "$SONGS"/*/song.json 2>/dev/null | head -1); D=$(dirname "$J")
+t0=$(date +%s)
+for i in $(seq 1 240); do [ "$(plutil -extract separator raw "$D/song.json" 2>/dev/null)" = "bs-roformer-sw" ] && break; sleep 5; done
+echo "cleaner parts: $(plutil -extract separator raw "$D/song.json" 2>/dev/null || echo none) after $(( $(date +%s) - t0 ))s"
+ui 'tell process "Backline" to set frontmost to true' >/dev/null; sleep 1
+ui 'keystroke space' >/dev/null; sleep 3; ui 'keystroke space' >/dev/null; sleep 1   # play then pause, so new parts load
+ui 'keystroke "3" using command down' >/dev/null
+t0=$(date +%s)
+for i in $(seq 1 180); do [ -f "$D/kick.caf" ] && plutil -extract drumSplit.method raw "$D/song.json" >/dev/null 2>&1 && break; sleep 5; done
+echo "beats drum kit: $(plutil -extract drumSplit.method raw "$D/song.json" 2>/dev/null || echo none) after $(( $(date +%s) - t0 ))s; mode=$(plutil -extract settings.mode raw "$D/song.json" 2>/dev/null)"
+ui 'keystroke "2" using command down' >/dev/null; sleep 1
+ui 'keystroke space' >/dev/null; sleep 2.5; ui 'keystroke "o"' >/dev/null; sleep 1; ui 'keystroke space' >/dev/null; sleep 2
+echo "dance: mode=$(plutil -extract settings.mode raw "$D/song.json" 2>/dev/null) one=$(plutil -extract settings.countOne raw "$D/song.json" 2>/dev/null || echo unset)"
 
 pgrep -x Backline >/dev/null && echo "still running at the end: yes" || echo "still running at the end: NO"
 ls ~/Library/Logs/DiagnosticReports 2>/dev/null | grep -i -E "backline|yt-dlp|qjs" || echo "crash reports: none"

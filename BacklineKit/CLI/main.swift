@@ -92,6 +92,40 @@ if args.count >= 4, args[1] == "split" {
     try writeWav(r.rhythm, to: out.appendingPathComponent("rhythm.wav"))
     exit(0)
 }
+// backline-cli separate-hq <input> <outdir> [--model <BSRoformerSW.mlpackage>]
+//   High-quality second pass: BS-RoFormer SW 6 stems. Same filenames as `separate`.
+if args.count >= 4, args[1] == "separate-hq" {
+    let semHQ = DispatchSemaphore(value: 0)
+    Task {
+        do {
+            let t0 = Date()
+            let audio = try AudioDecoder.decode(URL(fileURLWithPath: args[2]))
+            let t1 = Date()
+            print(String(format: "decode   %.2fs  (%.1fs of audio)", t1.timeIntervalSince(t0), audio.duration))
+            var pkg = URL(fileURLWithPath: "../ml/BSRoformerSW.mlpackage")
+            if let i = args.firstIndex(of: "--model"), i + 1 < args.count { pkg = URL(fileURLWithPath: args[i + 1]) }
+            let modelURL = try await RoformerSeparator.locateModel(packageFallback: pkg)
+            let sep = try RoformerSeparator(modelURL: modelURL)
+            let t2 = Date()
+            print(String(format: "load     %.2fs", t2.timeIntervalSince(t1)))
+            let stems = try sep.separate(audio) { p in
+                print(String(format: "\r  chunk %d/%d  eta %.1fs", p.chunk, p.chunks, p.secondsRemaining ?? 0), terminator: "")
+                fflush(stdout)
+            }
+            let t3 = Date()
+            print(String(format: "\nseparate %.2fs  (%.1fx realtime)", t3.timeIntervalSince(t2), audio.duration / t3.timeIntervalSince(t2)))
+            let out = URL(fileURLWithPath: args[3])
+            try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+            for (name, s) in zip(RoformerSeparator.sources, stems) {
+                try writeWav(s, to: out.appendingPathComponent("\(name).wav"))
+            }
+            print("wrote", out.path)
+        } catch { print("error:", error); exit(1) }
+        semHQ.signal()
+    }
+    semHQ.wait()
+    exit(0)
+}
 if args.count >= 3, args[1] == "analyze" {
   let sem0 = DispatchSemaphore(value: 0)
   Task {
@@ -131,6 +165,52 @@ if args.count >= 3, args[1] == "analyze" {
   }
   sem0.wait()
   exit(0)
+}
+// backline-cli drums <drums.wav> <outdir> --model <DrumSepMDX23C.mlpackage>
+//   Splits a separated drums stem into kick / snare / toms / hh / cymbals (+ rest).
+if args.count >= 4, args[1] == "drums" {
+    let semD = DispatchSemaphore(value: 0)
+    Task {
+        do {
+            guard let mi = args.firstIndex(of: "--model"), mi + 1 < args.count else {
+                print("usage: backline-cli drums <drums.wav> <outdir> --model <DrumSepMDX23C.mlpackage>")
+                exit(2)
+            }
+            let t0 = Date()
+            let audio = try AudioDecoder.decode(URL(fileURLWithPath: args[2]))
+            let t1 = Date()
+            print(String(format: "decode   %.2fs  (%.1fs of audio)", t1.timeIntervalSince(t0), audio.duration))
+            let compiled = try await MLModel.compileModel(at: URL(fileURLWithPath: args[mi + 1]))
+            var overlap = DrumSeparator.numOverlap
+            if let oi = args.firstIndex(of: "--overlap"), oi + 1 < args.count, let v = Int(args[oi + 1]) { overlap = v }
+            var units: MLComputeUnits = .cpuAndGPU
+            if args.contains("--ane") { units = .cpuAndNeuralEngine }
+            let sep = try DrumSeparator(modelURL: compiled, computeUnits: units, overlap: overlap)
+            if args.contains("--warm") { sep.warmUp() }
+            print("overlap \(overlap)")
+            let t2 = Date()
+            print(String(format: "load     %.2fs", t2.timeIntervalSince(t1)))
+            let parts = try sep.separate(audio) { f in
+                print(String(format: "\r  %3.0f%%", f * 100), terminator: "")
+                fflush(stdout)
+            }
+            let dt = Date().timeIntervalSince(t2)
+            print(String(format: "\ndrums    %.2fs  (%.1fx realtime)", dt, audio.duration / dt))
+            let out = URL(fileURLWithPath: args[3])
+            try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+            for name in DrumSeparator.parts + [DrumSeparator.restKey] {
+                guard let s = parts[name] else { continue }
+                try writeWav(s, to: out.appendingPathComponent("\(name).wav"))
+                var rms: Float = 0
+                vDSP_rmsqv(s.left, 1, &rms, vDSP_Length(s.frameCount))
+                print(String(format: "  %-8@ rms %.5f", name, rms))
+            }
+            print("wrote", out.path)
+        } catch { print("error:", error); exit(1) }
+        semD.signal()
+    }
+    semD.wait()
+    exit(0)
 }
 guard args.count >= 4, args[1] == "separate" else {
     print("usage: backline-cli separate <input> <outdir> [--model <mlpackage>]")

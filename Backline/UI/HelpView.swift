@@ -137,7 +137,7 @@ struct HelpPageView: View {
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(model.song == nil)
         case .remove:
-            Button("Show my split songs in Finder") { NSWorkspace.shared.activateFileViewerSelecting([model.store.root]) }
+            Button("Show my split songs in Finder") { NSWorkspace.shared.activateFileViewerSelecting([model.store.root.deletingLastPathComponent()]) }
                 .buttonStyle(SecondaryButtonStyle())
         default:
             EmptyView()

@@ -7,18 +7,24 @@ Applications, and you're done.
 
 ---
 
-**A Mac practice player for guitarists. Drop in a song, take your part out, and play along.**
+**A Mac practice player for musicians, dancers and singers. Drop in a song, take it apart, and practise.**
 
-Backline splits a song into instruments on your Mac. Nothing is uploaded. Turn off the part you play,
-then loop, slow down, change the pitch and count in. Save the result as a backing track.
+Backline splits a song into instruments on your Mac. Nothing is uploaded. Pick how you practise:
+
+- **Play:** turn off the part you play (even just the lead guitar) and play along with the band.
+- **Dance:** hear one instrument at a time, tap on the 1, and Backline counts to 8 for you.
+- **Beats:** the singer is off, the drums split into kick, snare and hi-hats, and loops snap to the bar.
+
+Then loop, slow down or speed up, count in, and save the result as a track.
 
 ![Backline with the lead guitar removed](docs/images/mixer.png)
 
 ## Quick install
 
 **You need:** a Mac with Apple silicon (M1 or newer, like a 2022 MacBook Air) running macOS 15 Sequoia,
-macOS 26 Tahoe or macOS 27 Golden Gate, and about 1 GB of free space.
-Nothing else: no Terminal, no extra downloads, no admin password.
+macOS 26 Tahoe or macOS 27 Golden Gate, and about 2 GB of free space.
+No Terminal and no admin password. The first time it opens, Backline quietly downloads two extra models
+(about 550 MB, once) that make the parts cleaner and split the drums.
 
 **1. Download.** Click **[Download Backline for Mac](https://github.com/alexpizarro/backline/releases/latest/download/Backline.dmg)**.
 Your browser saves **Backline.dmg** in **Downloads**.
@@ -71,6 +77,15 @@ for non-technical people, were reused here.
 
 ## What it does
 
+- **Three ways to practise.** Switch at the top of any song: **Play**, **Dance** or **Beats** (or ⌘1, ⌘2, ⌘3).
+  Each one shows only what that kind of practice needs. Each song remembers its mode.
+- **Dance:** "Listen for" brings one part forward (bongó, güira, bass, guitar…) while the rest plays
+  softly. Tap on the 1 and the counts 1 to 8 run with the music. Loops are whole eights, the count-in
+  says 5, 6, 7, 8, and bachata's guitars are called requinto and segunda.
+- **Beats:** the singer starts off. One click loops 1, 2, 4 or 8 bars, right on the beat. The drums split
+  into kick, snare, hi-hats and the rest, and Music opens into its parts when you want them.
+- **Cleaner parts.** Songs open in seconds, then a sharper model splits them again in the background
+  and the cleaner parts swap in by themselves.
 - **Lead and rhythm guitar as separate tracks.** Remove the solo and keep the rhythm. An AI model trained
   on lead vs rhythm guitar works together with a stereo method, all built in, with nothing extra to install.
   It works best on the usual metal/rock mix, with rhythm guitars panned left and right and the solo in the
@@ -85,7 +100,8 @@ for non-technical people, were reused here.
 - **Mini player** that floats over tabs, a DAW or a video lesson.
 - **Get songs in** from a file, a YouTube link, or by recording from any app on your Mac.
 - **Save a backing track** (WAV, AIFF or MP3) with your speed and pitch applied.
-- Everything runs on your Mac. A song is ready in about 11 seconds on an M3 Max.
+- Everything runs on your Mac, on its graphics chip. A song is ready in about 11 seconds on an M3 Max; the
+  cleaner parts follow about a minute later.
 
 <p>
   <img src="docs/images/mini-player.png" alt="Mini player" width="440">
@@ -110,7 +126,7 @@ are included with Backline.
 | drypaint lead/rhythm model | A community HTDemucs model that separates lead from rhythm guitar. Backline blends it with its own stereo method |
 | [Ultimate Vocal Remover](https://github.com/Anjok07/ultimatevocalremovergui) | The go-to desktop app for vocal and instrument separation, with many models |
 | [python-audio-separator](https://github.com/nomadkaraoke/python-audio-separator) | Command-line and Python access to the UVR models |
-| [Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) | Training code and many community models, including guitar-specific ones |
+| [Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) | Training code and many community models, including the BS-RoFormer and DrumSep models Backline downloads |
 | [Beat This!](https://github.com/CPJKU/beat_this) | Accurate beat and downbeat tracker. Backline uses it for the click and loop snapping |
 | [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) | High-quality time-stretch and pitch-shift library behind Backline's speed control |
 | [JammLab](https://github.com/cyberflow/JammLab) | Another native macOS practice app with on-device stem separation |
@@ -142,7 +158,10 @@ swift test --package-path BacklineKit      # engine and DSP tests
 
 ## Licences
 
-- **Models:** Beat This! (code and weights MIT). Lead/rhythm guitar model by drypaint (HTDemucs, via MVSep community). Demucs: the code is MIT; Meta's pretrained HTDemucs weights
+- **Models:** BS-RoFormer SW (checkpoint by jarredou, no licence published) for the cleaner parts, and
+  MDX23C DrumSep by jarredou and aufr33 (CC BY-NC-SA 4.0) for the drum kit. Both are downloaded once from
+  this repo's [models release](https://github.com/alexpizarro/backline/releases/tag/models-1) and checked.
+  Beat This! (code and weights MIT). Lead/rhythm guitar model by drypaint (HTDemucs, via MVSep community). Demucs: the code is MIT; Meta's pretrained HTDemucs weights
   are not under MIT and are described by their author as provided for research purposes. Backline is free
   and non-commercial and credits them.
 - **Audio code:** Signalsmith Stretch and Linear (MIT). LAME (LGPL, loaded as a replaceable library).

@@ -79,15 +79,38 @@ final class AppModel {
     }
 
     /// Global "I'm playing" choice remembered across songs (nil = full mix).
-    @ObservationIgnored @AppStorage("playingInstrument") private var playingInstrumentRaw: String = StemKind.leadGuitar.rawValue
+    @ObservationIgnored @AppStorage("playingInstrument") var playingInstrumentRaw: String = StemKind.leadGuitar.rawValue
+
+    /// The practice mode last used (Play · Dance · Beats). Songs remember their own; this is the default.
+    var appMode: PracticeMode = PracticeMode(rawValue: UserDefaults.standard.string(forKey: "practiceMode") ?? "") ?? .play {
+        didSet { UserDefaults.standard.set(appMode.rawValue, forKey: "practiceMode") }
+    }
 
     let engine = PlaybackEngine()
     let store = SongStore.shared
     @ObservationIgnored private var saveWork: DispatchWorkItem?
     @ObservationIgnored private var ticker: Timer?
     /// Serialises everything that reallocates engine memory (song loads, exports).
-    @ObservationIgnored private let engineGate = EngineGate()
-    @ObservationIgnored private var loadGeneration = 0
+    @ObservationIgnored let engineGate = EngineGate()
+    @ObservationIgnored var loadGeneration = 0
+    /// Tracks currently in engine memory (the song's engine tracks as of its last load).
+    @ObservationIgnored var loadedTracks: [StemKind] = []
+    /// Background drum split of the open song (0…1 while running).
+    var drumSplitProgress: Double?
+    @ObservationIgnored var drumJob: Task<Void, Never>?
+    @ObservationIgnored var drumCancel: CancelBox?
+    @ObservationIgnored var pendingTrackReload = false
+    /// Cleaner background pass (0…1 while running).
+    var hqProgress: Double?
+    @ObservationIgnored var hqJob: Task<Void, Never>?
+    @ObservationIgnored var hqCancel: CancelBox?
+    /// The open song's record with new parts on disk, applied when the engine reloads at the next pause.
+    @ObservationIgnored var pendingRecord: SongRecord?
+    @ObservationIgnored var forceTrackReload = false
+    /// Big models fetched once in the background (see ModelDownloads).
+    var downloadingModel: String?
+    var modelDownloadProgress: Double?
+    @ObservationIgnored var modelDownloadTask: Task<Void, Never>?
     /// Set while the user drags the playhead so the ticker doesn't fight the drag.
     @ObservationIgnored var isScrubbing = false
 
@@ -95,6 +118,12 @@ final class AppModel {
         library = store.loadAll()
         SeparationService.shared.warmUp()
         startTicker()
+        #if DEBUG
+        let harness = Snapshotter.outputDir != nil && !CommandLine.arguments.contains("--models-base")
+        #else
+        let harness = false
+        #endif
+        if !harness { startModelDownloads() }
     }
 
     /// Detected tempo scaled by the user's half-time / double-time choice.
@@ -134,8 +163,8 @@ final class AppModel {
 
     // MARK: - Stem state
 
-    /// Tracks shown in the mixer and loaded in the engine (lead/rhythm replace guitar when split).
-    var stems: [StemKind] { song?.mixStems ?? [] }
+    /// Rows shown in the mixer for the current mode (each controls one or more engine tracks).
+    var stems: [StemKind] { rows.map(\.kind) }
 
     func isOn(_ k: StemKind) -> Bool { !settings.removed.contains(k) }
     func isAudible(_ k: StemKind) -> Bool {
@@ -273,6 +302,13 @@ final class AppModel {
     }
 
     private func defaultLoopFromPosition() {
+        // Dancers loop an eight; Beats loops 4 bars from the bar line. Play loops the section.
+        if mode == .dance, oneBeatIndex != nil { loopCounts(8); settings.loopEnabled = false; return }
+        if mode == .beats, let r = BarLoop.range(bars: 4, at: position, downbeats: barLines, fallbackBar: barLength) {
+            settings.loopStart = r.lowerBound
+            settings.loopEnd = min(duration, r.upperBound)
+            return
+        }
         if let s = sections.first(where: { $0.start <= position && position < $0.end }) {
             settings.loopStart = s.start
             settings.loopEnd = s.end
@@ -312,6 +348,7 @@ final class AppModel {
         var h = Hasher()
         h.combine(song.id); h.combine(count); h.combine(settings.removed); h.combine(settings.solo)
         h.combine(settings.volumes); h.combine(settings.showGuitarSplit)
+        h.combine(settings.spotlight); h.combine(mode); h.combine(song.drumSplit != nil)
         let key = h.finalize()
         if let c = mixBarsCache, c.key == key { return c.bars }
         let bars = computeMixBars(song: song, count: count)
@@ -322,11 +359,11 @@ final class AppModel {
     private func computeMixBars(song: SongRecord, count: Int) -> [Float] {
         var sum = [Float](repeating: 0, count: count)
         var tot = [Float](repeating: 0, count: count)
-        for k in song.mixStems {
-            let p = song.peaks(for: k)
+        for k in stems {
+            let p = rowPeaks(k)
             guard !p.isEmpty else { continue }
             let r = Peaks.resample(p, to: count)
-            let g = isAudible(k) ? Float(settings.volume(k) / 80) : 0
+            let g = isAudible(k) ? Float(settings.volume(k) / 80) * spotlightFactor(k) : 0
             for i in 0..<count {
                 tot[i] += r[i] * r[i]
                 sum[i] += (r[i] * g) * (r[i] * g)
@@ -367,7 +404,7 @@ final class AppModel {
         scheduleSave()
     }
 
-    private func pushAll() {
+    func pushAll() {
         pushMix()
         engine.setRate(Double(settings.speed) / 100)
         engine.setSemitones(Double(settings.pitch))
@@ -395,7 +432,7 @@ final class AppModel {
     /// Linear gain for a track: its fader when audible; −15 dB of its fader when removed in guide mode.
     func trackGain(_ k: StemKind) -> Float {
         let fader = Self.gain(forVolume: settings.volume(k))
-        if isAudible(k) { return fader }
+        if isAudible(k) { return fader * spotlightFactor(k) }
         if settings.guide && settings.solo == nil && !isOn(k) { return fader * 0.178 }   // −15 dB
         return 0
     }
@@ -408,10 +445,9 @@ final class AppModel {
     }
 
     private func pushMix() {
-        for (i, k) in stems.enumerated() {
-            let scale = song?.storageGain(k) ?? 1
-            let g = trackGain(k) / max(scale, 1e-6)
-            engine.setGain(stem: i, g)
+        for (i, leaf) in loadedTracks.enumerated() {
+            let scale = song?.storageGain(leaf) ?? 1
+            engine.setGain(stem: i, trackGain(rowKind(forTrack: leaf)) / max(scale, 1e-6))
         }
     }
 
@@ -447,6 +483,7 @@ final class AppModel {
             isPlaying = false
         }
         if st.countInBeat != countInBeat { countInBeat = st.countInBeat }
+        if pendingTrackReload && !isPlaying { performTrackReload() }
         if st.loopPasses != loopPasses { loopPasses = st.loopPasses }
         let live = settings.trainer.enabled && settings.loopEnabled
             ? (st.playing ? Int((st.rate * 100).rounded()) : settings.trainer.from)
@@ -488,6 +525,7 @@ final class AppModel {
 
     private func startImport(url: URL, id: String, accessing: Bool) {
         if !url.path.contains("/Backline/Downloads/") { lastYouTube = nil }
+        pauseBackgroundWork()
         persistCurrent()
         stopPlayback()
         lastImportURL = url
@@ -550,6 +588,7 @@ final class AppModel {
         }
         persistCurrent()
         stopPlayback()
+        pauseBackgroundWork()
         importTitle = "YouTube link"
         importProgress = ImportProgress(phase: 0, fraction: 0, secondsRemaining: nil)
         downloadingFromYouTube = true
@@ -634,6 +673,8 @@ final class AppModel {
         }
         persistCurrent()
         stopPlayback()
+        pendingRecord = nil
+        forceTrackReload = false
         loadGeneration += 1
         let generation = loadGeneration
         // Load stems off the main thread straight into engine memory (one load at a time).
@@ -660,7 +701,7 @@ final class AppModel {
 
     /// Reads the song's mix tracks from disk straight into engine memory. Off the main thread.
     nonisolated static func loadEngine(_ rec: SongRecord, store: SongStore, engine: PlaybackEngine) -> Bool {
-                let tracks = rec.mixStems
+                let tracks = rec.engineTracks
                 let frames = tracks.map { SongStore.frameCount(of: store.mixURL(rec, $0)) }.max() ?? 0
                 guard frames > 0, engine.allocate(stemCount: tracks.count, frames: frames) else { return false }
                 for (i, k) in tracks.enumerated() {
@@ -676,7 +717,7 @@ final class AppModel {
     private func activate(_ rec: SongRecord, stems: [StemKind: StereoAudio]?, fresh: Bool) {
         var rec = rec
         if let stems {
-            let tracks = rec.mixStems
+            let tracks = rec.engineTracks
             _ = engine.allocate(stemCount: tracks.count, frames: stems.values.map(\.frameCount).max() ?? 0)
             for (i, k) in tracks.enumerated() {
                 guard let s = stems[k] else { continue }
@@ -705,8 +746,15 @@ final class AppModel {
                 st.loopEnabled = true
                 st.lastPosition = solo.start
             }
+            prepareMode(&st, song: rec, fresh: true)
+            rec.settings = st
+        } else if rec.settings.mode == nil {
+            var st = rec.settings
+            prepareMode(&st, song: rec, fresh: false)
             rec.settings = st
         }
+        if let m = rec.settings.mode, m != appMode { appMode = m }
+        loadedTracks = rec.engineTracks
         rec.lastOpened = Date()
         engine.commit()
         song = rec
@@ -721,6 +769,8 @@ final class AppModel {
         withAnimation(.smooth(duration: 0.4)) { screen = .mixer }
         if let i = library.firstIndex(where: { $0.id == rec.id }) { library[i] = rec }
         scheduleSave()
+        ensureCleanerParts()
+        ensureDrumSplit()
     }
 
     private func stopPlayback() {
@@ -767,10 +817,17 @@ final class AppModel {
         rec.settings = settings
         rec.settings.lastPosition = position
         song = rec
-        if let i = library.firstIndex(where: { $0.id == rec.id }) { library[i] = rec }
+        // New parts waiting for the engine: what's on disk is the new record, with today's settings.
+        var disk = rec
+        if let p = pendingRecord, p.id == rec.id {
+            disk = p
+            disk.settings = rec.settings
+            disk.lastOpened = rec.lastOpened
+        }
+        if let i = library.firstIndex(where: { $0.id == rec.id }) { library[i] = disk }
         let store = self.store
-        if synchronously { try? store.save(rec) }
-        else { Task.detached(priority: .utility) { try? store.save(rec) } }
+        if synchronously { try? store.save(disk) }
+        else { Task.detached(priority: .utility) { try? store.save(disk) } }
     }
 
     // MARK: - Export
@@ -796,11 +853,8 @@ final class AppModel {
         guard let song else { return }
         // Snapshot the mix before the modal save panel: nothing the user types there (or any key that
         // reaches the app) can change what gets exported.
-        let removed = settings.removed
-        let gains: [Float] = stems.map { k in
-            // The backing track never contains a removed part — not via Guide, not via Solo.
-            (isAudible(k) && !removed.contains(k)) ? Self.gain(forVolume: settings.volume(k)) / max(song.storageGain(k), 1e-6) : 0
-        }
+        // The backing track never contains a removed part, not via Guide and not via Solo.
+        let gains = exportGains()
         let rate = Double(settings.speed) / 100
         let semitones = Double(settings.pitch)
         let loopOnly = exportLoopOnly

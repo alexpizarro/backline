@@ -16,7 +16,7 @@
 
 namespace {
 
-constexpr int kMaxStems = 8;
+constexpr int kMaxStems = 12;   // v0.17: drums can be four kit parts
 constexpr int kBlock = 1024;             // internal render quantum
 constexpr int kXfade = 256;              // declick / loop-splice crossfade (~5.8 ms)
 constexpr int kGainRampFrames = 441;     // full-scale gain ramp (~10 ms)
@@ -667,7 +667,11 @@ void bl_engine_seek(BLEngine *e, int64_t frame) { e->pendingSeek.store(std::max<
 
 BLEngineStatus bl_engine_status(const BLEngine *e) {
     BLEngineStatus s;
-    s.position = e->stPosition.load(std::memory_order_relaxed);
+    // A seek is applied on the next render. Until then (e.g. before the first Play, when the output
+    // isn't running yet) report where the playhead is going, not where it was.
+    const int64_t pending = e->pendingSeek.load(std::memory_order_acquire);
+    s.position = pending >= 0 ? std::min<int64_t>(pending, std::max<int64_t>(0, e->length - 1))
+                              : e->stPosition.load(std::memory_order_relaxed);
     s.playing = e->stPlaying.load(std::memory_order_relaxed);
     s.countInBeat = e->stCountInBeat.load(std::memory_order_relaxed);
     s.loopPasses = e->stLoopPasses.load(std::memory_order_relaxed);

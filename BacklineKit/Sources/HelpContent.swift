@@ -3,7 +3,7 @@ import Foundation
 /// Built-in help, written for a 10-year-old: short sentences, everyday words, one step at a time.
 /// Kept in BacklineKit (plain data) so a unit test can check the reading level of every line.
 public enum HelpTopic: String, CaseIterable, Identifiable, Sendable {
-    case start, addSong, removeLead, practice, export, youtube, youtubeSignIn, record, miniPlayer,
+    case start, addSong, removeLead, practice, dance, beats, export, youtube, youtubeSignIn, record, miniPlayer,
          keys, troubleshooting, remove
 
     public var id: String { rawValue }
@@ -37,6 +37,28 @@ public enum HelpContent {
                     HelpStep("play.fill", "Press Play, or press the space bar. Now you are the band's guitar player!"),
                  ],
                  tip: "Everything stays on your Mac. Backline does not send your songs to anyone."),
+
+        HelpPage(topic: .dance, title: "Practice a dance", symbol: "figure.dance",
+                 intro: "Click Dance at the top. Backline counts the music for you, and lets you hear one part at a time.",
+                 steps: [
+                    HelpStep("figure.dance", "Pick a part under Listen for, like Bass. It plays loud. The rest of the band plays soft."),
+                    HelpStep("hand.tap", "Play the song. Click Tap on the 1 when you hear the 1. You can also press O."),
+                    HelpStep("8.circle", "Now the counts 1 to 8 start. The one you are on lights up."),
+                    HelpStep("repeat", "Click Loop to play one eight again and again. Hold it down for 16 or 32 counts."),
+                    HelpStep("tortoise", "Make it slower or faster with Speed. The music stays in tune."),
+                 ],
+                 tip: "Count-in says 5, 6, 7, 8 before the music starts, like a teacher. Bachata or salsa? Pick it next to the song name."),
+
+        HelpPage(topic: .beats, title: "Rap or sing over a beat", symbol: "music.mic",
+                 intro: "Click Beats at the top. Backline turns the singer off, so the beat is yours.",
+                 steps: [
+                    HelpStep("repeat", "Click 1, 2, 4 or 8 bars. The loop starts on the bar you are in, right on the beat."),
+                    HelpStep("hand.draw", "Or drag on the wave to make a loop. It snaps to the bars."),
+                    HelpStep("hand.tap", "Click Tap on the 1 when you hear the first beat of a bar. Then the beats count 1 to 4."),
+                    HelpStep("chevron.right.circle", "Click the arrow next to Music to see its parts, like guitar and keys."),
+                    HelpStep("ear", "Want to hear the singer softly? Turn on Guide."),
+                 ],
+                 tip: "Click the same bars again to stop the loop. Save the beat with Save track."),
 
         HelpPage(topic: .addSong, title: "Add a song", symbol: "plus.circle",
                  intro: "There are four ways to add a song. Pick the one that is easiest for you.",
@@ -129,6 +151,7 @@ public enum HelpContent {
                     HelpStep("l.square", "L: turn the loop on or off."),
                     HelpStep("k.square", "K: turn the count-in on or off."),
                     HelpStep("c.square", "C: turn the click on or off."),
+                    HelpStep("o.square", "O: set the 1 in Dance or Beats."),
                     HelpStep("g.square", "G: turn the guide on or off."),
                     HelpStep("r.square", "R: hear every part again."),
                     HelpStep("1.square", "Number keys: turn a part on or off. 1 is the top part."),
@@ -150,7 +173,7 @@ public enum HelpContent {
         HelpPage(topic: .remove, title: "Remove Backline", symbol: "trash",
                  intro: "Backline does not change anything else on your Mac. It does not add other programs. It is easy to remove.",
                  steps: [
-                    HelpStep("externaldrive", "First, click the button below. It shows the folder with your split songs."),
+                    HelpStep("externaldrive", "First, click the button below. It shows the Backline folder. It has your split songs and extra models."),
                     HelpStep("trash", "Drag that folder to the Trash. This frees up space."),
                     HelpStep("xmark.circle", "Quit Backline. Then open the Applications folder."),
                     HelpStep("trash", "Drag Backline to the Trash. That's it!"),

@@ -15,6 +15,8 @@ cd "$(dirname "$0")/.."
 
 TEAM=SBMJ9PMG22
 PROFILE=${NOTARY_PROFILE:-backline-notary}
+# SKIP_NOTARIZE=1: signed but not notarized, for testing only (never publish that DMG).
+SKIP_NOTARIZE=${SKIP_NOTARIZE:-0}
 VERSION=$(awk -F'"' '/MARKETING_VERSION/ {print $2; exit}' project.yml)
 ARCHIVE=build/archive/Backline-$VERSION.xcarchive
 EXPORT=build/export/$VERSION
@@ -23,7 +25,7 @@ DIST=dist
 echo "▸ Backline $VERSION"
 security find-identity -v -p codesigning | grep -q "Developer ID Application" || {
     echo "✗ No 'Developer ID Application' certificate in the keychain. See the setup notes at the top of this script."; exit 1; }
-xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1 || {
+[ "$SKIP_NOTARIZE" = 1 ] || xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1 || {
     echo "✗ Notary profile '$PROFILE' missing. Run: xcrun notarytool store-credentials $PROFILE --apple-id … --team-id $TEAM --password …"; exit 1; }
 
 XCODEGEN=${XCODEGEN:-$(command -v xcodegen || echo ~/.local/tools/xcodegen/bin/xcodegen)}
@@ -80,6 +82,7 @@ find "$APP/Contents" -type f ! -type l | while read -r f; do
 done
 codesign -dv "$APP" 2>&1 | grep -E "Authority=Developer ID|TeamIdentifier"
 
+if [ "$SKIP_NOTARIZE" != 1 ]; then
 echo "▸ Notarizing the app"
 # Notarize and staple the app itself first, so the copy people drag to Applications carries its own
 # ticket (recognised instantly, even offline), then build the DMG around it.
@@ -89,6 +92,7 @@ xcrun notarytool submit "$APPZIP" --keychain-profile "$PROFILE" --wait | grep -E
 rm -f "$APPZIP"
 for i in $(seq 1 12); do xcrun stapler staple "$APP" >/dev/null 2>&1 && break; echo "  staple retry $i"; sleep 30; done
 xcrun stapler validate "$APP" >/dev/null || { echo "✗ app could not be stapled (Apple ticket service); run again later"; exit 1; }
+fi
 
 echo "▸ Building DMG"
 # Drag-to-install window: the app on the left, Applications on the right, and a background that says
@@ -132,6 +136,10 @@ hdiutil convert "$RW" -format ULFO -o "$DMG" >/dev/null
 rm -f "$RW"
 codesign --sign "Developer ID Application" --timestamp "$DMG"
 
+if [ "$SKIP_NOTARIZE" = 1 ]; then
+  echo "! $DMG is signed but NOT notarized (SKIP_NOTARIZE=1): for testing only, do not publish."
+  exit 0
+fi
 echo "▸ Notarizing (this takes a few minutes)"
 xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
 # Apple's ticket service sometimes drops the connection right after acceptance; retry the staple.

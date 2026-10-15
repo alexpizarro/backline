@@ -22,10 +22,46 @@ nonisolated struct SongStore: Sendable {
         folder(rec.id).appendingPathComponent("\(rec.mixFileStem(kind)).caf")
     }
     func otherSplitURL(_ id: String) -> URL { folder(id).appendingPathComponent("other-split.caf") }
+    /// The original mix, kept so a cleaner model can split the real audio later.
+    func originalURL(_ id: String) -> URL { folder(id).appendingPathComponent("original.caf") }
+    /// A store in a sibling folder, for writing a complete new set of parts before swapping it in.
+    var staging: SongStore { SongStore(root: root.deletingLastPathComponent().appendingPathComponent("Staging", isDirectory: true)) }
+
+    /// Reads a whole stem file into memory (44.1 kHz stereo float).
+    func readAudio(_ url: URL) throws -> StereoAudio {
+        let frames = Self.frameCount(of: url)
+        guard frames > 0 else { throw CocoaError(.fileReadCorruptFile) }
+        var left = [Float](repeating: 0, count: frames), right = [Float](repeating: 0, count: frames)
+        try left.withUnsafeMutableBufferPointer { l in
+            try right.withUnsafeMutableBufferPointer { r in
+                try readStem(url, left: l.baseAddress!, right: r.baseAddress!, capacity: frames)
+            }
+        }
+        return StereoAudio(left: left, right: right, sampleRate: 44_100)
+    }
     func artworkURL(_ id: String) -> URL { folder(id).appendingPathComponent("artwork") }
     func recordURL(_ id: String) -> URL { folder(id).appendingPathComponent("song.json") }
 
+    /// Puts back a song folder left aside by an interrupted cleaner-pass swap (Staging/<id>-old with no
+    /// live folder), and clears unfinished staging folders.
+    func recoverInterruptedSwaps() {
+        let fm = FileManager.default
+        let stagingRoot = staging.root
+        guard let names = try? fm.contentsOfDirectory(atPath: stagingRoot.path) else { return }
+        for name in names {
+            let url = stagingRoot.appendingPathComponent(name, isDirectory: true)
+            if name.hasSuffix("-old") {
+                let id = String(name.dropLast(4))
+                if !fm.fileExists(atPath: folder(id).path) { try? fm.moveItem(at: url, to: folder(id)) }
+                else { try? fm.removeItem(at: url) }
+            } else {
+                try? fm.removeItem(at: url)
+            }
+        }
+    }
+
     func loadAll() -> [SongRecord] {
+        recoverInterruptedSwaps()
         let fm = FileManager.default
         guard let ids = try? fm.contentsOfDirectory(atPath: root.path) else { return [] }
         let dec = JSONDecoder()
@@ -39,6 +75,10 @@ nonisolated struct SongStore: Sendable {
                ![StemKind.leadGuitar, .rhythmGuitar].allSatisfy({ fm.fileExists(atPath: stemURL(id, $0).path) })
                 || (gs.otherAdjusted && !fm.fileExists(atPath: otherSplitURL(id).path)) {
                 r.guitarSplit = nil
+            }
+            if r.originalScale != nil, !fm.fileExists(atPath: originalURL(id).path) { r.originalScale = nil }
+            if r.drumSplit != nil, !StemKind.drumParts.allSatisfy({ fm.fileExists(atPath: stemURL(id, $0).path) }) {
+                r.drumSplit = nil
             }
             return r
         }

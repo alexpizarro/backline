@@ -56,11 +56,12 @@ final class KeyboardRouter {
         }
         switch key {
         case "l": model.toggleLoop(); return true
+        case "o": if model.mode != .play { model.setOneHere() }; return true
         case "a": model.abPress(); return true
         case "g": if !model.settings.removed.isEmpty { model.settings.guide.toggle() }; return true
         case "k": model.settings.countIn.toggle(); return true
         case "c": model.settings.click.toggle(); return true
-        case "r": model.settings.removed = []; model.settings.solo = nil; return true
+        case "r": model.settings.removed = []; model.settings.solo = nil; model.settings.spotlight = nil; return true
         case "[": model.stepSpeed(-1); return true
         case "]": model.stepSpeed(1); return true
         case "-": model.stepPitch(-1); return true
@@ -68,8 +69,8 @@ final class KeyboardRouter {
         default: break
         }
         // Digit row and keypad by physical key, so Shift (solo) and non-US layouts both work.
-        let digitKeys: [UInt16: Int] = [18: 0, 19: 1, 20: 2, 21: 3, 23: 4, 22: 5, 26: 6,
-                                        83: 0, 84: 1, 85: 2, 86: 3, 87: 4, 88: 5, 89: 6]
+        let digitKeys: [UInt16: Int] = [18: 0, 19: 1, 20: 2, 21: 3, 23: 4, 22: 5, 26: 6, 28: 7, 25: 8,
+                                        83: 0, 84: 1, 85: 2, 86: 3, 87: 4, 88: 5, 89: 6, 91: 7, 92: 8]
         if let i = digitKeys[event.keyCode] {
             guard i < model.stems.count else { return false }
             if mods == .shift { model.toggleSolo(model.stems[i]) } else { model.toggle(model.stems[i]) }

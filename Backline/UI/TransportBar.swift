@@ -34,8 +34,9 @@ struct TransportBar: View {
         let compact = level >= 3
         let iconToggles = level >= 2
         let shortExport = level >= 1
+        let mode = model.mode
         HStack(spacing: spacing) {
-            PlayButton(isPlaying: model.isPlaying, countInBeat: model.countInBeat) { model.togglePlay() }
+            PlayButton(isPlaying: model.isPlaying, countInBeat: model.countInLabel) { model.togglePlay() }
 
             HStack(spacing: 0) {
                 Text(formatTime(model.position)).foregroundStyle(Theme.ink)
@@ -47,7 +48,8 @@ struct TransportBar: View {
             if !compact { Rectangle().fill(Theme.hairline2).frame(width: 1, height: 28) }
 
             LoopChip(compact: iconToggles)
-            ABButton(compact: compact)
+            // Dance loops whole eights and Beats has the bar chips, so A/B is only in Play.
+            if mode == .play { ABButton(compact: compact) }
 
             HStack(spacing: 8) {
                 if !iconToggles { Text("Speed").font(Typo.ui(12.5)).foregroundStyle(Theme.muted).fixedSize() }
@@ -57,11 +59,14 @@ struct TransportBar: View {
                          reset: { model.settings.trainer.enabled = false; model.settings.speed = 100 },
                          canDown: model.settings.speed > 50, canUp: model.settings.speed < 150)
                     .help("Slow down or speed up without changing pitch · ⌘← ⌘→")
-                TrainerButton(active: model.settings.trainer.enabled) { trainerPopover.toggle() }
-                    .popover(isPresented: $trainerPopover, arrowEdge: .top) { TrainerPopover() }
+                if mode != .beats {
+                    TrainerButton(active: model.settings.trainer.enabled) { trainerPopover.toggle() }
+                        .popover(isPresented: $trainerPopover, arrowEdge: .top) { TrainerPopover() }
+                }
             }
 
-            HStack(spacing: 8) {
+            // Dancers don't change the key, and the counts do the click's job.
+            if mode != .dance { HStack(spacing: 8) {
                 if iconToggles {
                     Image(systemName: "tuningfork").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.muted)
                 } else {
@@ -73,10 +78,10 @@ struct TransportBar: View {
                          reset: { model.settings.pitch = 0 },
                          canDown: model.settings.pitch > -12, canUp: model.settings.pitch < 12)
                     .help("Pitch: \(formatPitch(model.settings.pitch)). Move it up or down one fret at a time · ⌘↑ ⌘↓")
-            }
+            } }
 
-            CountInCheckbox(isOn: $model.settings.countIn, compact: iconToggles)
-            ClickToggle(isOn: $model.settings.click, compact: iconToggles)
+            CountInCheckbox(isOn: $model.settings.countIn, compact: iconToggles, dance: mode == .dance)
+            if mode != .dance { ClickToggle(isOn: $model.settings.click, compact: iconToggles) }
 
             Spacer(minLength: 0)
 
@@ -85,7 +90,7 @@ struct TransportBar: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "square.and.arrow.up").font(.system(size: 12, weight: .semibold))
-                    if !compact { Text(shortExport ? "Save" : "Save backing track") }
+                    if !compact { Text(shortExport ? "Save" : (mode == .play ? "Save backing track" : "Save track")) }
                 }
                 .fixedSize()
             }
@@ -148,7 +153,31 @@ struct LoopChip: View {
 
     var body: some View {
         let on = model.settings.loopEnabled
-        Button { model.toggleLoop() } label: {
+        if model.mode == .dance {
+            Menu {
+                ForEach([8, 16, 32], id: \.self) { n in
+                    Button("Loop \(n) counts") { model.loopCounts(n) }
+                }
+                if on { Divider(); Button("Stop the loop") { model.settings.loopEnabled = false } }
+            } label: {
+                chip(on: on)
+            } primaryAction: {
+                if on { model.settings.loopEnabled = false } else { model.loopCounts(8) }
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .fixedSize()
+            .help("Loop this eight · L. Click and hold to loop 16 or 32 counts.")
+        } else {
+            Button { model.toggleLoop() } label: { chip(on: on) }
+                .buttonStyle(.plain)
+                .onHover { hover = $0 }
+                .help("Loop a part · L. Click a part above, or hold Option and drag on the wave.")
+                .animation(.easeOut(duration: 0.15), value: on)
+        }
+    }
+
+    func chip(on: Bool) -> some View {
             HStack(spacing: 8) {
                 Image(systemName: "repeat").font(.system(size: 11, weight: .bold))
                     .foregroundStyle(on ? Theme.magentaText : Theme.muted)
@@ -169,16 +198,13 @@ struct LoopChip: View {
             .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .strokeBorder(on ? Theme.magenta.opacity(0.5) : Theme.hairline2))
             .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hover = $0 }
-        .help("Loop a part · L. Click a part above, or hold Option and drag on the wave.")
-        .animation(.easeOut(duration: 0.15), value: on)
     }
 
     var rangeText: String {
         if let a = model.loopCaptureA { return "\(formatTime(a))–…" }
-        guard let r = model.loopRange else { return "–:––" }
+        guard let r = model.loopRange else { return model.mode == .dance ? "8 counts" : "–:––" }
+        if model.mode == .dance, let n = model.loopCountLength { return "\(n) counts" }
+        if model.mode == .beats, let n = model.loopBarCount { return n == 1 ? "1 bar" : "\(n) bars" }
         return "\(formatTime(r.lowerBound))–\(formatTime(r.upperBound))"
     }
 }
@@ -241,6 +267,7 @@ struct StepperHalf: View {
 struct CountInCheckbox: View {
     @Binding var isOn: Bool
     var compact = false
+    var dance = false
     var body: some View {
         Button { isOn.toggle() } label: {
             HStack(spacing: 8) {
@@ -256,7 +283,7 @@ struct CountInCheckbox: View {
                 }
                 .frame(width: 16, height: 16)
                 if compact {
-                    Text("1-4").font(Typo.mono(11, .semibold)).foregroundStyle(Theme.ink2).fixedSize()
+                    Text(dance ? "5-8" : "1-4").font(Typo.mono(11, .semibold)).foregroundStyle(Theme.ink2).fixedSize()
                 } else {
                     Text("Count-in").font(Typo.ui(12.5)).foregroundStyle(Theme.ink2).fixedSize()
                 }
@@ -265,7 +292,7 @@ struct CountInCheckbox: View {
         }
         .buttonStyle(.plain)
         .animation(.spring(duration: 0.2), value: isOn)
-        .help("Four clicks before the music starts · K")
+        .help(dance ? "Counts 5, 6, 7, 8 before the music starts · K" : "Four clicks before the music starts · K")
         .accessibilityLabel("Count-in")
         .accessibilityValue(isOn ? "On" : "Off")
     }

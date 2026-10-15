@@ -35,6 +35,19 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(e.status.position, 256 + 4096)
     }
 
+    /// Before the first Play nothing renders, so a seek must still show at once (it used to snap back to 0).
+    func testSeekBeforeFirstRenderReportsNewPosition() {
+        let e = PlaybackEngine(drivesOutput: false)
+        e.load(stems: makeStems(), pitchLocked: [false, false, false])
+        e.seek(frame: Int64(3 * sr))
+        XCTAssertEqual(e.status.position, Int64(3 * sr))
+        e.seek(frame: Int64(4 * sr))
+        XCTAssertEqual(e.status.position, Int64(4 * sr))
+        e.play()
+        _ = e.renderForTesting(frames: 512)
+        XCTAssertEqual(e.status.position, Int64(4 * sr) + 512)
+    }
+
     func testMuteRampsWithoutClick() {
         let e = PlaybackEngine(drivesOutput: false)
         e.load(stems: makeStems(), pitchLocked: [false, false, false])
