@@ -1,8 +1,10 @@
-# Backline vs StemDeck — for a musician or student
+# Backline vs StemDeck: for a musician or student
 
-*Compared 26 September 2026: Backline 0.13 against [StemDeck](https://github.com/stemdeckapp/stemdeck)
-0.18.1. Both were read from source, not marketing copy. StemDeck's own README comparison table is out of
-date (it still says there is no pitch shift or click track, and both exist now).*
+*Last updated 16 October 2026 for Backline 0.17. The first comparison, on 26 September, read both apps
+from source (Backline 0.13, [StemDeck](https://github.com/stemdeckapp/stemdeck) 0.18.1). The StemDeck
+column was brought up to its 0.20.0 release from its release notes only, so check its page for the
+latest. StemDeck's own README comparison table is out of date (it still says there is no pitch shift or
+click track, and both exist now).*
 
 Both apps split songs with the same open model, Meta's Demucs `htdemucs_6s`, so the raw stems sound much
 the same. The difference is what each app does with them. StemDeck is a general, cross-platform stem tool
@@ -13,7 +15,7 @@ out of a song and learn to play it.
 
 | For a musician or student | Backline | StemDeck |
 |---|---|---|
-| **Slow down** | 50–150 % in 5 % steps, key unchanged | Only 0.75× or 1× on desktop (their team found slower sounded bad). 0–2× slider in the phone view |
+| **Slow down** | 50–150 % in 5 % steps (slower and faster), key unchanged | Slower only: a 0.50× to 0.99× slow speed you set by scrolling, plus 1× (since 0.19.1, using the same Signalsmith Stretch library). 0–2× slider in the phone view |
 | **Speed trainer** (gets faster each loop) | Yes: start, step, every N loops, target | No |
 | **Transpose** | ±12 semitones for the whole song; drums never shift | ±6 semitones, and each instrument can be moved on its own |
 | **Remove my part** | "I'm playing" buttons, remembered between songs. Guide mode plays your part quietly (−15 dB) | No preset; mute stems yourself |
@@ -29,16 +31,24 @@ out of a song and learn to play it.
 | **Mixer** | Faders, on/off, solo | Same, plus level meters |
 | **Practising next to tabs or a DAW** | **Mini player** floating above full-screen apps; single-key shortcuts; PageUp/PageDown for page-turner pedals | About 6 shortcuts; open it on a phone over Wi-Fi via QR code |
 | **Where it runs** | macOS 15 or newer, Apple silicon only | Mac (Intel too, macOS 13+), Windows, Linux, Docker; 11 languages |
-| **Install** | Signed and notarized DMG; opens normally; no extra downloads | Unsigned on Mac (a Terminal command before first launch); downloads ~0.5 GB+ of runtime and models on first launch |
+| **Install** | Signed and notarized DMG; opens normally. Gets two extra models (about 550 MB) by itself in the background, and works without them meanwhile | Unsigned on Mac (a Terminal command before first launch); downloads ~0.5 GB+ of runtime and models on first launch |
 | **Separation speed** | Core ML on the Apple GPU: a 3:51 song in about 5 s on an M3 Max | PyTorch; in our measurements that path was about 3× slower on the same Mac |
+| **Drums** | Split into kick, snare, hi-hats and other drums (since 0.17), and into bongó, güira and bombo in Dance mode | One drums stem |
+| **Practice modes** | **Play**, **Dance** (counts 1 to 8, "listen for" one instrument, loops of whole eights, 5-6-7-8 count-in) and **Beats** (loops of 1 to 8 bars, bar counter, singer off), one switch | One studio for everything |
+| **Lyrics** | None | Finds lyrics and follows the singer line by line; you can time lines yourself |
+| **Explains itself** | Built-in Help and a first-run question that sets the mode | A Guide button that explains every control in the studio |
 | **Licence and community** | Free download; source public; one maintainer | Free, open source (Apache-2.0), ~3.9 k GitHub stars, Discord |
 
 ## Who each suits
 
 - **Guitar or instrument student learning parts and solos → Backline.** Half speed, the speed trainer,
   the lead/rhythm split, "I'm playing", beat-snapped loops and per-song memory all serve practice.
-  StemDeck's 0.75× floor is its biggest gap for students.
-- **Singer or karaoke → StemDeck.** Lead/backing vocal split, per-instrument transpose, karaoke video.
+  StemDeck now lets you set a slow speed, but it still can't speed a part up or ramp the tempo for you.
+- **Dancer (bachata, salsa) → Backline.** Counts 1 to 8 that you set by tapping on the 1, a "listen for"
+  row that brings one instrument forward, loops of whole eights, and a count-in that says 5, 6, 7, 8.
+- **Rapper or singer over a beat → Backline,** for the bar loops and the split drum kit.
+  **Singer who needs the words → StemDeck,** for lyrics that follow the vocal and a lead/backing vocal split,
+  per-instrument transpose and karaoke video.
 - **Producer, remixer or DAW user → StemDeck.** Individual stem export, FLAC, drag-to-DAW.
 - **Drummer, or anyone in prog or odd meters → StemDeck.** Better click and an editable beat grid.
 - **Anyone not on a recent Apple silicon Mac → StemDeck.** Backline won't run for them.
@@ -62,4 +72,5 @@ the split is less clean.
 ## What Backline could take from StemDeck
 
 Individual stem export · click volume and count-in length · a shown tuning offset (it is already
-detected) · library search · beat and bar lines on the waveform · a lead/backing vocal split.
+detected) · library search · a lead/backing vocal split · lyrics that follow the singer. (Beat and bar
+lines on the waveform came in 0.17 with the Dance and Beats modes.)

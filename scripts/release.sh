@@ -23,6 +23,10 @@ EXPORT=build/export/$VERSION
 DIST=dist
 
 echo "▸ Backline $VERSION"
+# The README must be current for this version BEFORE the long build (see docs/release-checklist.md).
+if [ "$SKIP_NOTARIZE" != 1 ]; then
+  zsh scripts/check-readme.sh || exit 1
+fi
 security find-identity -v -p codesigning | grep -q "Developer ID Application" || {
     echo "✗ No 'Developer ID Application' certificate in the keychain. See the setup notes at the top of this script."; exit 1; }
 [ "$SKIP_NOTARIZE" = 1 ] || xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1 || {

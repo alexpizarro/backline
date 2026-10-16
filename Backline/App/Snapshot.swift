@@ -254,6 +254,11 @@ enum Snapshotter {
                 NSApp.terminate(nil)
                 return
             }
+            if CommandLine.arguments.contains("--readme-shots") {
+                await readmeShots(model: model, dir: dir)
+                NSApp.terminate(nil)
+                return
+            }
             if CommandLine.arguments.contains("--help-shots") {
                 await helpShots(model: model, dir: dir)
                 NSApp.terminate(nil)
@@ -475,6 +480,105 @@ enum Snapshotter {
     }
 
     /// Welcome cards, every Help page, the sign-in window and the "needs sign-in" error screen.
+    /// `Backline --snapshot <dir> --readme-shots`: every picture in the README, from the real app, using
+    /// Kevin MacLeod's demo songs in the library (the library list is hidden so nothing personal shows).
+    ///   play.png · dance.png · beats.png · dance-count-in.png · mini-player.png · install-welcome.png
+    static func readmeShots(model: AppModel, dir: URL) async {
+        let originalMode = model.appMode
+        model.showSidebar = false
+        func open(_ title: String) async -> SongRecord? {
+            guard let rec = model.library.first(where: { $0.title.localizedCaseInsensitiveContains(title) }) else { return nil }
+            model.select(rec)
+            var waited = 0.0
+            while model.song?.id != rec.id && waited < 30 { try? await Task.sleep(for: .seconds(0.2)); waited += 0.2 }
+            try? await Task.sleep(for: .seconds(1.2))
+            return rec
+        }
+        var log = ""
+
+        // Play: the lead guitar is out, and a section is looping.
+        if await open("Volitile") != nil {
+            model.setMode(.play)
+            model.settings.removed = [.leadGuitar]
+            model.settings.countIn = true
+            if let s = model.sections.dropFirst(2).first { model.loopSection(s) }
+            try? await Task.sleep(for: .seconds(0.9))
+            capture(dir.appendingPathComponent("play.png"))
+            // The floating glass panel doesn't render into a bitmap capture, so the mini player view is drawn
+            // straight from SwiftUI, on the Backline dark colour, with the solid (non-glass) background.
+            GlassSurfaceOverride.forceSolid = true
+            let mini = MiniPlayerView()
+                .environment(model)
+                .frame(width: 440)
+                .padding(18)
+                .background(Theme.bg)
+            let renderer = ImageRenderer(content: mini)
+            renderer.scale = 2
+            if let cg = renderer.cgImage {
+                let rep = NSBitmapImageRep(cgImage: cg)
+                if let png = rep.representation(using: .png, properties: [:]) {
+                    try? png.write(to: dir.appendingPathComponent("mini-player.png"))
+                    log += "mini rendered \(cg.width)x\(cg.height)\n"
+                }
+            }
+            GlassSurfaceOverride.forceSolid = false
+            log += "play ok\n"
+        } else { log += "missing Volitile\n" }
+
+        // Dance: bachata, tap on the 1 already done, Listen for a part, an eight looping.
+        if await open("Big Rock") != nil {
+            model.setMode(.dance)
+            model.setDanceStyle(.bachata)
+            var w = 0.0   // the kit split makes the bongó / güira rows
+            while (model.song?.drumSplit == nil || !model.loadedTracks.contains(.kick)) && w < 240 {
+                try? await Task.sleep(for: .seconds(0.5)); w += 0.5
+            }
+            model.seek(to: 52)
+            model.setOneHere()
+            if let k = model.danceListenParts.first(where: { $0 == .snare || $0 == .hats || $0 == .drums }) { model.toggleSpotlight(k) }
+            model.loopCounts(8)
+            model.settings.countIn = true
+            model.seek(to: model.loopRange?.lowerBound ?? 52)
+            try? await Task.sleep(for: .seconds(0.6))
+            // Count-in: 5, 6, 7, 8.
+            model.togglePlay()
+            for _ in 0..<60 where model.countInBeat < 2 { try? await Task.sleep(for: .seconds(0.05)) }
+            capture(dir.appendingPathComponent("dance-count-in.png"))
+            for _ in 0..<80 where model.countInBeat > 0 || !model.isPlaying { try? await Task.sleep(for: .seconds(0.05)) }
+            try? await Task.sleep(for: .seconds(0.9))
+            capture(dir.appendingPathComponent("dance.png"))
+            model.togglePlay()
+            log += "dance ok rows=\(model.rows.map { model.label($0.kind) })\n"
+        } else { log += "missing Big Rock\n" }
+
+        // Beats: vocals off, the kit split, a 2-bar loop.
+        if await open("Metalmania") != nil {
+            model.setMode(.beats)
+            var w = 0.0
+            while (model.song?.drumSplit == nil || !model.loadedTracks.contains(.kick)) && w < 240 {
+                try? await Task.sleep(for: .seconds(0.5)); w += 0.5
+            }
+            model.seek(to: 40)
+            model.setOneHere()
+            model.loopBars(2)
+            try? await Task.sleep(for: .seconds(0.8))
+            capture(dir.appendingPathComponent("beats.png"))
+            log += "beats ok rows=\(model.rows.map { model.label($0.kind) })\n"
+        } else { log += "missing Metalmania\n" }
+
+        // First run.
+        model.setMode(.play)
+        model.showWelcome = true
+        try? await Task.sleep(for: .seconds(0.9))
+        if let sheet = NSApp.windows.first(where: { $0.isVisible && !($0 is MiniPanel) })?.attachedSheet {
+            captureWindow(sheet, to: dir.appendingPathComponent("install-welcome.png"))
+        }
+        model.showWelcome = false
+        model.appMode = originalMode
+        model.showSidebar = true
+        try? log.write(to: dir.appendingPathComponent("readme-shots.txt"), atomically: true, encoding: .utf8)
+    }
+
     static func helpShots(model: AppModel, dir: URL) async {
         model.showWelcome = true
         try? await Task.sleep(for: .seconds(0.8))
