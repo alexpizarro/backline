@@ -7,6 +7,10 @@ struct RootView: View {
     @State private var windowDropTarget = false
 
     @State private var windowWidth: CGFloat = 1200
+    /// The song that was open when the splitting screen came up. The parts land row by row only when the split
+    /// ends on a new song, not when Cancel or a failure goes back to the one that was open (as on iOS).
+    @State private var splitStarted = false
+    @State private var songBeforeSplit: String?
 
     /// The library hides itself when the window is too narrow to hold it comfortably.
     private var sidebarVisible: Bool { model.showSidebar && windowWidth >= WindowLimits.sidebarThreshold }
@@ -38,13 +42,14 @@ struct RootView: View {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .strokeBorder(Theme.primaryTint, style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
                     .background(RoundedRectangle(cornerRadius: 14).fill(Theme.primary.opacity(0.08)))
-                    .overlay(Text("Drop a song or YouTube link to split it").font(Typo.ui(15, .semibold)).foregroundStyle(Theme.ink))
+                    .overlay(Text("Drop a song or a link to split it").font(Typo.ui(15, .semibold)).foregroundStyle(Theme.ink))
                     .padding(12)
                     .padding(.top, 36)
                     .allowsHitTesting(false)
                     .transition(.opacity)
             }
         }
+        .overlay { if model.resetting { ResettingView().transition(.opacity) } }
         .onDrop(of: [.fileURL, .url, .plainText], isTargeted: $windowDropTarget) { providers in
             loadDropped(providers, model: model)
             return true
@@ -53,6 +58,7 @@ struct RootView: View {
         .sheet(isPresented: $model.recordSheet) { RecordFromAppSheet() }
         .sheet(isPresented: $model.showWelcome) { WelcomeSheet() }
         .sheet(isPresented: $model.addSongSheet) { AddSongSheet() }
+        .modifier(SpotifyPresentations())
         .sheet(isPresented: $model.youTubeSignInSheet) {
             YouTubeSignInSheet(onSignedIn: { if model.lastYouTube != nil, model.screen != .mixer { model.retryImport() } },
                                onSignedInIsRetry: model.lastYouTube != nil && model.screen != .mixer)
@@ -73,15 +79,26 @@ struct RootView: View {
             case .analyzing:
                 AnalyzingView().transition(.opacity.combined(with: .scale(scale: 0.98)))
             case .mixer:
-                MixerView().transition(.opacity)
+                MixerView(landParts: splitStarted && model.song?.id != songBeforeSplit,
+                          onLanded: { splitStarted = false })
+                    .transition(.opacity)
             case .failed(let msg):
                 FailureView(message: msg).transition(.opacity)
+            }
+        }
+        .onChange(of: model.screen, initial: true) { _, screen in
+            switch screen {
+            case .analyzing:
+                if !splitStarted { splitStarted = true; songBeforeSplit = model.song?.id }
+            case .failed, .empty: splitStarted = false
+            case .mixer: break
             }
         }
     }
 }
 
-/// Files open as songs; web links (e.g. dragged from a browser tab) open as YouTube imports.
+/// Files open as songs; web links (e.g. dragged from a browser tab) open as link imports. A link Backline can't
+/// get a song from says so, as on iOS, instead of doing nothing.
 func loadDropped(_ providers: [NSItemProvider], model: AppModel) {
     if providers.contains(where: { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }) {
         loadFirstURL(providers) { model.open($0) }
@@ -91,14 +108,19 @@ func loadDropped(_ providers: [NSItemProvider], model: AppModel) {
     if p.canLoadObject(ofClass: URL.self) {
         _ = p.loadObject(ofClass: URL.self) { url, _ in
             guard let url else { return }
-            Task { @MainActor in _ = model.openText(url.absoluteString) }
+            Task { @MainActor in openDroppedText(url.absoluteString, model: model) }
         }
     } else {
         _ = p.loadObject(ofClass: String.self) { s, _ in
             guard let s else { return }
-            Task { @MainActor in _ = model.openText(s) }
+            Task { @MainActor in openDroppedText(s, model: model) }
         }
     }
+}
+
+@MainActor private func openDroppedText(_ text: String, model: AppModel) {
+    guard !model.resetting, !model.openText(text) else { return }
+    model.showToast(.init(text: "Can't get a song from this link.", isError: true))
 }
 
 func loadFirstURL(_ providers: [NSItemProvider], _ then: @escaping @MainActor (URL) -> Void) {
@@ -137,6 +159,24 @@ struct TitleBar: View {
         }
         .frame(height: 44)
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1) }
+    }
+}
+
+/// Over everything while Reset Backline runs (R01c): nothing can be clicked until Welcome.
+struct ResettingView: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            ProgressView().controlSize(.large)
+            Text("Resetting…")
+                .font(Typo.ui(16, .semibold))
+                .foregroundStyle(Theme.ink)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.bg)
+        .contentShape(Rectangle())
+        .onTapGesture {}
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("resetting")
     }
 }
 

@@ -49,12 +49,16 @@ extension AppModel {
     func setMode(_ m: PracticeMode) {
         appMode = m
         guard song != nil, m != mode else { return }
+        mapWindow = .whole(duration)
         var st = settings
         st.removedByMode[mode.rawValue] = st.removed.map(\.rawValue).sorted()
         if let saved = st.removedByMode[m.rawValue] {
             st.removed = Set(saved.compactMap(StemKind.init(rawValue:))).intersection(stems)
-        } else {
-            st.removed = defaultRemoved(for: m, tracks: stems)
+        } else if let song {
+            // Only parts in the main list: a guitar-free song never opens with a silent guitar "removed".
+            let main = Self.rows(for: m, style: st.danceStyle, song: song, musicOpen: st.musicOpen, placement: st.partPlacement)
+                .filter { !$0.quiet }.map(\.kind)
+            st.removed = defaultRemoved(for: m, tracks: main)
         }
         st.solo = nil
         st.spotlight = nil
@@ -98,7 +102,8 @@ extension AppModel {
         st.mode = m
         if m != .play {
             st.removedByMode[PracticeMode.play.rawValue] = st.removed.map(\.rawValue).sorted()
-            st.removed = defaultRemoved(for: m, tracks: Self.rows(for: m, style: st.danceStyle, song: rec, musicOpen: st.musicOpen).map(\.kind))
+            st.removed = defaultRemoved(for: m, tracks: Self.rows(for: m, style: st.danceStyle, song: rec, musicOpen: st.musicOpen,
+                                                                  placement: st.partPlacement).filter { !$0.quiet }.map(\.kind))
             st.loopEnabled = false
         }
         if m == .dance { applyDanceGuess(&st, song: rec) }
@@ -112,30 +117,38 @@ extension AppModel {
     }
 
     func setDanceStyle(_ s: DanceStyle) {
-        settings.danceStyle = s
-        if s != .other { settings.tempoScale = DanceGuess.guess(title: s.rawValue, bpm: detectedBPM).tempoScale }
-        if let k = settings.spotlight, !danceListenParts.contains(k) { settings.spotlight = nil }
+        let scale = s != .other ? DanceGuess.guess(title: s.rawValue, bpm: detectedBPM).tempoScale : nil
+        let parts = danceListenParts(for: s)
+        updateSettings { st in
+            st.danceStyle = s
+            if let scale { st.tempoScale = scale }
+            if let k = st.spotlight, !parts.contains(k) { st.spotlight = nil }
+        }
         ensureDrumSplit()
     }
 
     // MARK: Dance: Listen for
 
     /// Parts in the "Listen for" row, in the order dancers listen for them.
-    var danceListenParts: [StemKind] {
+    var danceListenParts: [StemKind] { danceListenParts(for: danceStyle) }
+
+    func danceListenParts(for style: DanceStyle) -> [StemKind] {
         var order: [StemKind] = [.drums, .snare, .hats, .kick, .bass, .leadGuitar, .rhythmGuitar, .guitar, .keys]
-        if danceStyle == .salsa { order.append(.other) }
+        if style == .salsa { order.append(.other) }
         order.append(.vocals)
-        return order.filter(stems.contains)
+        return order.filter(mainStems.contains)
     }
 
     /// One tap: that part loud, the rest quiet. Tap it again for the whole band.
     func toggleSpotlight(_ k: StemKind) {
-        if settings.spotlight == k {
-            settings.spotlight = nil
-        } else {
-            settings.removed.remove(k)
-            settings.solo = nil
-            settings.spotlight = k
+        updateSettings { s in
+            if s.spotlight == k {
+                s.spotlight = nil
+            } else {
+                s.removed.remove(k)
+                s.solo = nil
+                s.spotlight = k
+            }
         }
     }
 
@@ -196,14 +209,20 @@ extension AppModel {
 
     /// Loops `counts` counts (8, 16, 32) from the start of the eight at the playhead.
     func loopCounts(_ counts: Int) {
+        guard let r = countsRange(counts) else { return }
+        setLoop(start: r.lowerBound, end: r.upperBound)
+        if !isPlaying { seek(to: r.lowerBound) }
+    }
+
+    /// The eight (or 16, 32 counts) around the playhead, starting on its 1.
+    func countsRange(_ counts: Int) -> ClosedRange<Double>? {
         let beats = effectiveBeats
-        guard let one = oneBeatIndex, !beats.isEmpty else { return }
+        guard let one = oneBeatIndex, !beats.isEmpty else { return nil }
         let i = BeatGrid.index(at: position, in: beats) ?? one
         let s = DanceCounts.eightStart(beat: i, one: one)
         let a = max(0, BeatGrid.time(of: s, in: beats)), b = BeatGrid.time(of: s + counts, in: beats)
-        guard b > a else { return }
-        setLoop(start: a, end: b)
-        if !isPlaying { seek(to: a) }
+        guard b > a else { return nil }
+        return a...b
     }
 
     /// Length in counts of the current loop when it runs beat to beat (for "8 counts" labels).

@@ -40,14 +40,14 @@ struct MiniPlayerView: View {
     private var player: some View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
-                ArtworkTile(image: model.artwork, size: 34)
+                ArtworkTile(image: model.artwork, size: 34, cover: model.song.map { ($0.title, model.stems, $0.id) })
                 VStack(alignment: .leading, spacing: 1) {
                     Text(model.song?.title ?? "")
                         .font(Typo.ui(13, .bold))
                         .foregroundStyle(Theme.ink)
                         .lineLimit(1)
                     HStack(spacing: 0) {
-                        Text(formatTime(model.position)).foregroundStyle(Theme.ink2)
+                        Text(model.timeText.elapsed).foregroundStyle(Theme.ink2)
                         Text(" / \(formatTime(model.duration))").foregroundStyle(Theme.muted)
                     }
                     .font(Typo.mono(11))
@@ -147,20 +147,23 @@ struct MiniWaveform: View {
         GeometryReader { geo in
             let w = geo.size.width
             let dur = max(model.duration, 0.001)
-            ZStack(alignment: .leading) {
-                if model.settings.loopEnabled, let r = model.loopRange {
-                    Rectangle().fill(Theme.magenta.opacity(0.14))
-                        .frame(width: max(2, w * (r.upperBound - r.lowerBound) / dur))
-                        .offset(x: w * r.lowerBound / dur)
-                }
-                WaveformBars(bars: model.mixBars(count: max(20, Int(w / 3))), progress: model.position / dur, minHeight: 2)
-                Rectangle().fill(Theme.ink).frame(width: 2).shadow(color: .white.opacity(0.5), radius: 2)
-                    .offset(x: w * model.position / dur - 1)
+            // Metal, with the playhead from the transport clock: nothing here re-renders while the song plays.
+            WaveformView(config: WaveformConfig(
+                values: model.mixBars(count: 1600), normalize: false,
+                barColor: Theme.tokens.waveIdle, playedColor: Theme.tokens.wavePlayed,
+                minBarHeight: 2, barPitch: 3, gap: 1.5,
+                loop: model.settings.loopEnabled ? model.loopRange : nil,
+                loopFill: Theme.tokens.loopFill, loopEdge: Theme.tokens.loopEdge,
+                duration: dur, showPlayhead: true, playheadColor: Theme.tokens.playhead, playheadWidth: 2, glow: 0.4,
+                dark: Theme.isDark))
+            .overlay {
+                // The Metal view takes no clicks; this layer does.
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(DragGesture(minimumDistance: 0)
+                        .onChanged { v in model.isScrubbing = true; model.seek(to: Double(max(0, min(w, v.location.x)) / w) * dur) }
+                        .onEnded { _ in model.isScrubbing = false })
             }
-            .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0)
-                .onChanged { v in model.isScrubbing = true; model.seek(to: Double(max(0, min(w, v.location.x)) / w) * dur) }
-                .onEnded { _ in model.isScrubbing = false })
         }
     }
 }

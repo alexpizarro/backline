@@ -49,9 +49,9 @@ click its arrow.
 
 **You need:** a Mac with Apple silicon (M1 or newer, like a 2022 MacBook Air) running macOS 15 Sequoia,
 macOS 26 Tahoe or macOS 27 Golden Gate, and about 2 GB of free space.
-No Terminal and no admin password. The first time it opens, Backline quietly downloads two extra models
-(about 550 MB, once) that make the parts cleaner and split the drums. Until they arrive, everything still
-works with the models built in.
+No Terminal and no admin password. Two extra models (about 550 MB, once) make the parts cleaner and split
+the drums: the player offers them, and nothing is downloaded until you say yes. Everything works with the
+models built in.
 
 **1. Download.** Click **[Download Backline for Mac](https://github.com/alexpizarro/backline/releases/latest/download/Backline.dmg)**.
 Your browser saves **Backline.dmg** in **Downloads**.
@@ -75,23 +75,29 @@ sets the first mode, and you can change it at the top of the window whenever you
 
 **What to expect**
 - The first time you add a song, Backline takes a few seconds to split it (about 5 seconds on an M3 Max,
-  up to a minute on older Macs). After that, it opens instantly. A sharper model then splits it again in
-  the background, and the header says so. You can keep playing, and the cleaner parts swap in at your
-  next pause.
-- **Memory:** Backline keeps the parts of the song you're playing in memory (about 100 MB per minute of
-  song), and the two background models need a few hundred MB more while they run. **16 GB is
-  recommended**, and comfortable for songs up to about 10 minutes. **8 GB works for ordinary 3 to 5 minute
-  songs** if other big apps are closed; on 8 GB, let the cleaner pass finish before you play. On a busy
-  Mac the background steps just take longer. Backline stays usable and you can keep playing.
+  up to a minute on older Macs). After that, it opens in about half a second. While nothing is playing, the
+  lead and rhythm guitars are made sharper in the background; with the extra parts downloaded, a sharper
+  model then splits the whole song again, and the header says so. You can keep playing, and the better
+  parts swap in at your next pause.
+- **Memory:** Backline keeps the parts of the song you're playing in memory (about 75 MB per minute of
+  song, and about 105 MB once the drum kit is split), and the two background models need a few hundred MB
+  more while they run. **16 GB is recommended**, and comfortable for songs up to about 10 minutes.
+  **8 GB works for ordinary 3 to 5 minute songs** if other big apps are closed; on 8 GB, let the cleaner
+  pass finish before you play. On a busy Mac the background steps just take longer. Backline stays usable
+  and you can keep playing.
 - **Speed on an M1:** expect a few tens of seconds before a new song opens, and a few minutes for the
   cleaner parts. Newer chips are several times faster.
-- **Space:** about 200 MB per song (the parts plus the original, so the cleaner pass can run later).
+- **Space:** a 4-minute song takes about 170 MB while it is still being split and refined, and about half
+  that once the work is done: the finished parts are then stored as high-quality compressed audio. The song
+  you added is kept as it was, so a better model can split it again later.
 - **Record from an app:** the first time, macOS asks if Backline can record your system audio. Click
   **Allow**. Backline only records the app you pick.
-- **YouTube links:** most just work. If YouTube says to sign in, Backline shows a button to sign in on
-  Google's own page inside the app, with your Google email and password. Passkeys can't be used there
-  (Apple only allows them in web browsers), so Backline shows you how to pick your password instead.
-  Backline never sees your password.
+- **Links:** paste a song or video link, a link to a song on a music service, or a link straight to an
+  audio file. Most just work. If a video asks you to sign in, Backline shows a button to sign in on the
+  site's own page inside the app. Passkeys can't be used there (Apple only allows them in web browsers), so
+  Backline shows you how to pick your password instead. Backline never sees your password.
+- **If something goes wrong:** no song is lost. A song that won't open is kept with **Try again**; if
+  Backline closed while splitting a song, the song is in the Library with **Try again** and **Remove**.
 - **Help** is built in: choose **Help ▸ Backline Help**, or click any **?** button.
 - **To remove Backline,** drag it from Applications to the Trash. It doesn't install anything else.
   The extra models and your songs live in its own folder (Settings ▸ Show Folder).
@@ -113,7 +119,7 @@ If you want a cross-platform or general-purpose stem splitter, StemDeck is a bet
 [side-by-side comparison](docs/comparison-stemdeck.md).
 
 Backline also builds on lessons from [Count8](https://count8.app), a separate app I make for social
-dancing. Things learned there, like getting a song's audio from a YouTube link and keeping the app easy
+dancing. Things learned there, like getting a song's audio from a video link and keeping the app easy
 for non-technical people, were reused here.
 
 ## What it does
@@ -132,10 +138,10 @@ for non-technical people, were reused here.
   If a solo is found, the song opens with it already looped.
 - **Count-in and click** on the song's real beats. **Change the pitch** up to 12 frets up or down.
 - **Mini player** that floats over tabs, a DAW or a video lesson.
-- **Get songs in** from a file, a YouTube link, or by recording from any app on your Mac.
+- **Get songs in** from a file, a link, or by recording from any app or a microphone on your Mac.
 - **Save a track** (WAV, AIFF or MP3) with your speed and pitch applied.
 - Everything runs on your Mac, on its graphics chip. A song is ready in about 11 seconds on an M3 Max; the
-  cleaner parts follow about a minute later.
+  sharper guitars and the cleaner parts follow in the background.
 
 <img src="docs/images/mini-player.png" alt="The mini player, floating over other apps" width="440">
 
@@ -145,7 +151,7 @@ It's free. See [Quick install](#quick-install) above. Every release is in
 [Releases](https://github.com/alexpizarro/backline/releases), signed with an Apple Developer ID and
 notarized by Apple. Each one lists what changed.
 
-Only use songs you're allowed to use. Downloading from YouTube may be against YouTube's terms. No songs
+Only use songs you're allowed to use. Downloading from a video site may be against its terms. No songs
 are included with Backline.
 
 ## Other projects worth a look
@@ -162,19 +168,24 @@ are included with Backline.
 | [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) | High-quality time-stretch and pitch-shift library behind Backline's speed control |
 | [JammLab](https://github.com/cyberflow/JammLab) | Another native macOS practice app with on-device stem separation |
 | [go-play-in-the-band](https://github.com/brucehoppe/go-play-in-the-band) | Play-along practice app for guitarists; the idea for Backline's speed trainer came from here |
-| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | The downloader behind Backline's YouTube import. Backline compiles it from source to native code with [Nuitka](https://nuitka.net) and bundles it, so nothing needs installing |
-| [QuickJS-NG](https://github.com/quickjs-ng/quickjs) | Small, fast JavaScript engine. yt-dlp uses it to solve YouTube's playback checks |
+| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | The downloader Backline bundled for video links up to 1.0. Since 1.1 links go through Backline's own Swift link engine (shared with the iPhone app), which follows yt-dlp's behaviour and runs its challenge solver, [yt-dlp-ejs](https://github.com/yt-dlp/ejs), in JavaScriptCore |
 
 ## Updates and feedback
 
 Backline is a personal project. I'm the only person who makes changes, and I don't take pull requests.
-Bug reports and ideas are welcome as [issues](https://github.com/alexpizarro/backline/issues).
+Bug reports and ideas are welcome as [issues](https://github.com/alexpizarro/backline/issues); see
+[CONTRIBUTING.md](CONTRIBUTING.md). Please report security problems privately, as
+[SECURITY.md](SECURITY.md) explains.
+
+The iPhone and Android versions are not in this repository; their source is available on request through an
+[issue](https://github.com/alexpizarro/backline/issues).
 
 ## Build from source
 
 You need Xcode 26, [XcodeGen](https://github.com/yonaskolb/XcodeGen) and [Git LFS](https://git-lfs.com).
-The models, fonts and bundled tools are stored in LFS. The prebuilt YouTube downloader in
-`Vendor/yt-dlp/` is rebuilt from source with `scripts/build-ytdlp.sh` (needs [uv](https://docs.astral.sh/uv/)).
+The models, fonts and bundled tools are stored in LFS. The link engine is Swift and needs nothing else. The
+old yt-dlp helper in `Vendor/yt-dlp/` is only built and embedded for a build made with `BACKLINE_YTDLP=1`
+(kept for the 1.1 release only; `scripts/build-ytdlp.sh` rebuilds it, needs [uv](https://docs.astral.sh/uv/)).
 
 ```sh
 git lfs pull
@@ -182,6 +193,9 @@ xcodegen generate
 xcodebuild -project Backline.xcodeproj -scheme Backline -configuration Release build
 swift test --package-path BacklineKit      # engine and DSP tests
 ```
+
+`.github/workflows/ci.yml` runs the build and these tests on GitHub's macOS runners, with the LFS objects
+cached so a run doesn't download the models each time.
 
 - **Code:** `Backline/` holds the app, `BacklineKit/` the audio engine and analysis, and `ml/` the model
   conversion scripts.
@@ -193,6 +207,8 @@ swift test --package-path BacklineKit      # engine and DSP tests
 
 ## Licences
 
+- **Backline's own code:** MIT ([LICENSE](LICENSE)). Everything below keeps its own licence; the full list
+  with links is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - **Models:** BS-RoFormer SW (checkpoint by jarredou, no licence published) for the cleaner parts, and
   MDX23C DrumSep by jarredou and aufr33 (CC BY-NC-SA 4.0) for the drum kit. Both are downloaded once from
   this repo's [models release](https://github.com/alexpizarro/backline/releases/tag/models-1) and checked.
@@ -200,13 +216,14 @@ swift test --package-path BacklineKit      # engine and DSP tests
   Demucs: the code is MIT; Meta's pretrained HTDemucs weights are not under MIT and are described by their
   author as provided for research purposes. Backline is free and non-commercial and credits them.
 - **Audio code:** Signalsmith Stretch and Linear (MIT). LAME (LGPL, loaded as a replaceable library).
-- **YouTube import:** yt-dlp (Unlicense), compiled with Nuitka, with its bundled libraries (certifi MPL-2.0,
-  pycryptodomex BSD/Public Domain, Brotli MIT, websockets BSD, requests Apache-2.0, urllib3 MIT, yt-dlp-ejs
-  Unlicense, CPython PSF). QuickJS-NG (MIT).
+- **Links:** yt-dlp-ejs, the challenge solver (Unlicense; it bundles meriyah ISC and astring MIT). Only in a
+  `BACKLINE_YTDLP=1` build: yt-dlp (Unlicense), compiled with Nuitka, with its bundled libraries (certifi
+  MPL-2.0, pycryptodomex BSD/Public Domain, Brotli MIT, websockets BSD, requests Apache-2.0, urllib3 MIT,
+  CPython PSF) and QuickJS-NG (MIT).
 - **Fonts:** Plus Jakarta Sans and JetBrains Mono (OFL).
 - **Full notices:** [Acknowledgements](Backline/Resources/Acknowledgements.txt).
 - **Screenshots:** the demo songs are "Volatile Reaction", "Big Rock" and "Metalmania" by Kevin MacLeod
   ([incompetech.com](https://incompetech.com), Creative Commons: By Attribution, CC BY).
 
-<!-- readme-reviewed-for: 0.17 -->
-<!-- screenshots-taken-with: 0.17 -->
+<!-- readme-reviewed-for: 1.1 -->
+<!-- screenshots-taken-with: 1.1 -->

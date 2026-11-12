@@ -27,6 +27,8 @@ echo "▸ Backline $VERSION"
 if [ "$SKIP_NOTARIZE" != 1 ]; then
   zsh scripts/check-readme.sh || exit 1
 fi
+# The kit must be byte-identical with the iOS app's before a release.
+zsh scripts/kit-sync-check.sh || exit 1
 security find-identity -v -p codesigning | grep -q "Developer ID Application" || {
     echo "✗ No 'Developer ID Application' certificate in the keychain. See the setup notes at the top of this script."; exit 1; }
 [ "$SKIP_NOTARIZE" = 1 ] || xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1 || {

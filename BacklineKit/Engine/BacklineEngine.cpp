@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <thread>
@@ -37,6 +38,23 @@ inline float softClip(float x) {
     return std::copysign(y, x);
 }
 
+/// Stored samples are 16-bit; the mixer works in float. 1/32768 is a power of two and every int16 fits a float's
+/// mantissa, so this gives exactly the Float32 a 16-bit file decodes to (D3, storage F2).
+constexpr float kSampleScale = 1.0f / 32768.0f;
+
+inline float sampleToFloat(int16_t s) { return float(s) * kSampleScale; }
+
+void toFloat(const int16_t *src, float *dst, int n) {
+    if (n <= 0) return;
+    float k = kSampleScale;
+    vDSP_vflt16(src, 1, dst, 1, vDSP_Length(n));
+    vDSP_vsmul(dst, 1, &k, dst, 1, vDSP_Length(n));
+}
+
+/// A part's samples for the whole song. `calloc`, so pages nothing has written yet cost no memory and read as zeros.
+struct FreeSamples { void operator()(int16_t *p) const { std::free(p); } };
+using Samples = std::unique_ptr<int16_t[], FreeSamples>;
+
 void softClipBuffer(float *x, int n) {
     for (int i = 0; i < n; ++i) x[i] = softClip(x[i]);
 }
@@ -57,6 +75,15 @@ void mixWithRamp(float *dstL, float *dstR, const float *srcL, const float *srcR,
     }
 }
 
+/// RMS of a stereo pair over n frames: the root of the mean of both channels' mean squares.
+float stereoRMS(const float *l, const float *r, int n) {
+    if (n <= 0) return 0.0f;
+    float ml = 0.0f, mr = 0.0f;
+    vDSP_measqv(l, 1, &ml, vDSP_Length(n));
+    vDSP_measqv(r, 1, &mr, vDSP_Length(n));
+    return std::sqrt(0.5f * (ml + mr));
+}
+
 std::vector<float> makeClick(double sr, double freq, float amp) {
     const int n = int(sr * 0.045);
     std::vector<float> c(size_t(n), 0.0f);
@@ -73,6 +100,7 @@ std::vector<float> makeClick(double sr, double freq, float amp) {
 struct BLEngine {
     explicit BLEngine(double sr) : sampleRate(sr) {
         for (auto &g : targetGain) g.store(1.0f);
+        for (auto &l : stLevel) l.store(0.0f);
         for (auto &g : curGain) g = 1.0f;
         clickAccent = makeClick(sr, 1760.0, 0.55f);
         clickNormal = makeClick(sr, 1320.0, 0.40f);
@@ -86,7 +114,7 @@ struct BLEngine {
     // --- Song data. Mutated only while !ready and no render is in flight.
     int nStems = 0;
     int64_t length = 0;
-    std::vector<float> data[kMaxStems * 2];
+    Samples data[kMaxStems * 2];          // planar 16-bit, `length` frames each
     bool pitchLocked[kMaxStems] = {};
     std::unique_ptr<Stretch> stretch[kMaxStems];
     int inCapacity = 0;
@@ -126,6 +154,7 @@ struct BLEngine {
     std::atomic<int> trainerEvery{2};
     std::atomic<int64_t> pendingSeek{-1};
     std::atomic<int> pendingTransport{0};   // 1 play, 2 pause
+    std::atomic<bool> holdW{false};         // a finger is scrubbing: keep quiet and only move the position
 
     // --- Status (audio thread → any thread).
     std::atomic<int64_t> stPosition{0};
@@ -135,11 +164,16 @@ struct BLEngine {
     std::atomic<bool> stReachedEnd{false};
     std::atomic<int> stLatency{0};
     std::atomic<double> stRate{1.0};
+    /// Per-part RMS of what each part adds to the mix (× its gain), and the master after the soft clip, for
+    /// the current render block; 0 while paused, counting in or holding (AD-11). Read by the Stage light.
+    std::atomic<float> stLevel[kMaxStems];
+    std::atomic<float> stMaster{0.0f};
 
     // --- Audio-thread state.
     bool playing = false;          // transport running (count-in or audio)
     bool audioRunning = false;     // past the count-in
     bool stretchMode = false;
+    bool holding = false;          // scrub hold: silent, seeks only move feedPos (no stretcher re-prime)
     double curRate = 1.0, curSemis = 0.0;
     int64_t feedPos = 0;           // next source frame handed to the path
     double inFrac = 0.0;
@@ -163,7 +197,7 @@ struct BLEngine {
 
     /// Source frame currently heard at the engine output.
     int64_t heardPosition() const {
-        if (!audioRunning || !stretchMode) return std::clamp<int64_t>(feedPos, 0, length);
+        if (holding || !audioRunning || !stretchMode) return std::clamp<int64_t>(feedPos, 0, length);
         const double lat = pathLatency();
         int64_t p = feedPos - int64_t(lat);
         if (loopOn && loopArmed && wrappedSinceArm && p < loopA && feedPos >= loopA && double(feedPos - loopA) < lat) {
@@ -197,22 +231,21 @@ struct BLEngine {
             const int64_t limit = loopActive ? loopB : length;
             const int seg = int(std::min<int64_t>(n - i, limit - feedPos));
             if (!loopActive) {
-                for (int k = 0; k < S2; ++k)
-                    std::memcpy(inPtr[k] + i, data[k].data() + feedPos, sizeof(float) * size_t(seg));
+                for (int k = 0; k < S2; ++k) toFloat(data[k].get() + feedPos, inPtr[k] + i, seg);
             } else {
                 const int64_t zone = loopB - kXfade;
                 const int64_t span = loopB - loopA;
                 const int plain = int(std::clamp<int64_t>(zone - feedPos, 0, seg));
                 for (int k = 0; k < S2; ++k) {
-                    const float *src = data[k].data();
+                    const int16_t *src = data[k].get();
                     float *d = inPtr[k] + i;
-                    if (plain > 0) std::memcpy(d, src + feedPos, sizeof(float) * size_t(plain));
+                    if (plain > 0) toFloat(src + feedPos, d, plain);
                     for (int j = plain; j < seg; ++j) {
                         const int64_t p = feedPos + j;
                         const float w = 0.5f - 0.5f * std::cos(float(M_PI) * (float(p - zone) + 0.5f) / kXfade);
                         const int64_t q = p - span;
-                        const float b = q >= 0 ? src[q] : 0.0f;
-                        d[j] = src[p] * (1.0f - w) + b * w;
+                        const float b = q >= 0 ? sampleToFloat(src[q]) : 0.0f;
+                        d[j] = sampleToFloat(src[p]) * (1.0f - w) + b * w;
                     }
                 }
             }
@@ -252,6 +285,24 @@ struct BLEngine {
         inFrac = 0.0;
     }
 
+    /// Starts a scrub hold. With `fadeOut`, the audio that was playing fades out over one crossfade; without it
+    /// (the path only started this block) nothing has sounded yet.
+    void enterHold(bool fadeOut) {
+        if (fadeOut) {
+            const int64_t heard = heardPosition();
+            // The fade-out reads ahead; a loop wrap inside it isn't a pass the player heard (as in seekStretchers).
+            const uint32_t passes = loopPasses;
+            const double rateBefore = curRate;
+            captureXfade();
+            loopPasses = passes;
+            curRate = rateBefore;
+            feedPos = heard;
+        }
+        holding = true;
+        fadeInLeft = 0;
+        lastHeard = -1;       // the beat scan starts afresh on release; a click already sounding plays out
+    }
+
     void startAudioAt(int64_t p) {
         audioRunning = true;
         armLoop(p);
@@ -259,14 +310,17 @@ struct BLEngine {
         else feedPos = p;
     }
 
-    /// Renders the current path (no count-in, no fades) into L/R, overwriting.
-    void renderPath(float *L, float *R, int n) {
+    /// Renders the current path (no count-in, no fades) into L/R, overwriting. `meter`: also publish each
+    /// part's level (not for the crossfade capture, which renders ahead).
+    void renderPath(float *L, float *R, int n, bool meter = true) {
         std::memset(L, 0, sizeof(float) * size_t(n));
         std::memset(R, 0, sizeof(float) * size_t(n));
         if (!stretchMode) {
             feed(n);
-            for (int s = 0; s < nStems; ++s)
+            for (int s = 0; s < nStems; ++s) {
                 mixWithRamp(L, R, inPtr[2 * s], inPtr[2 * s + 1], n, curGain[s], targetGain[s].load(std::memory_order_relaxed));
+                if (meter) stLevel[s].store(stereoRMS(inPtr[2 * s], inPtr[2 * s + 1], n) * curGain[s], std::memory_order_relaxed);
+            }
         } else {
             inFrac += n * curRate;
             int inN = int(inFrac);
@@ -278,13 +332,14 @@ struct BLEngine {
                 float *ins[2] = {inPtr[2 * s], inPtr[2 * s + 1]};
                 stretch[s]->process(ins, inN, outs, n);
                 mixWithRamp(L, R, outs[0], outs[1], n, curGain[s], targetGain[s].load(std::memory_order_relaxed));
+                if (meter) stLevel[s].store(stereoRMS(outs[0], outs[1], n) * curGain[s], std::memory_order_relaxed);
             }
         }
     }
 
     /// Captures kXfade frames of the path as it is now, to crossfade into whatever comes next.
     void captureXfade() {
-        renderPath(xfadeBuf[0].data(), xfadeBuf[1].data(), kXfade);
+        renderPath(xfadeBuf[0].data(), xfadeBuf[1].data(), kXfade, false);
         xfadeLeft = kXfade;
     }
 
@@ -304,17 +359,20 @@ struct BLEngine {
     /// Mixes metronome clicks for the beats heard during this block. `h0` is the heard source frame at
     /// the first rendered sample (captured before the path advanced) and `outOffset` where audio starts
     /// in the block. If the heard position wraps a loop inside the block, the scan runs in two pieces.
-    void renderBeatClicks(float *L, float *R, int n, int64_t h0, int outOffset) {
+    /// Plays on a beat click that is already sounding, from output offset `from`.
+    void renderClickTail(float *L, float *R, int n, int from) {
+        if (clickPlayFrom < 0) return;
         const float g = clickGain.load(std::memory_order_relaxed) * 0.8f;
+        const auto &c = clickPlayAccent ? clickAccent : clickNormal;
+        for (int i = from; i < n && clickPlayPos < int(c.size()); ++i, ++clickPlayPos) {
+            L[i] += c[size_t(clickPlayPos)] * g; R[i] += c[size_t(clickPlayPos)] * g;
+        }
+        if (clickPlayPos >= int(c.size())) clickPlayFrom = -1;
+    }
+
+    void renderBeatClicks(float *L, float *R, int n, int64_t h0, int outOffset) {
         // Continue a click that started in an earlier block.
-        auto playTail = [&](int from) {
-            if (clickPlayFrom < 0) return;
-            const auto &c = clickPlayAccent ? clickAccent : clickNormal;
-            for (int i = from; i < n && clickPlayPos < int(c.size()); ++i, ++clickPlayPos) {
-                L[i] += c[size_t(clickPlayPos)] * g; R[i] += c[size_t(clickPlayPos)] * g;
-            }
-            if (clickPlayPos >= int(c.size())) clickPlayFrom = -1;
-        };
+        auto playTail = [&](int from) { renderClickTail(L, R, n, from); };
         playTail(0);
         const int gi = gridIndex.load(std::memory_order_acquire);
         const uint32_t gen = gridGen.load(std::memory_order_acquire);
@@ -399,15 +457,22 @@ struct BLEngine {
         const double wantSemis = std::clamp(semitones.load(std::memory_order_relaxed), -24.0, 24.0);
         const bool wantStretch = !isIdentity(wantRate, wantSemis);
 
+        // Enter a hold before the seek: a seek that arrives with it is then already cheap, and the fade-out is of
+        // the audio that was playing, not of the seek target.
+        const bool holdReq = holdW.load(std::memory_order_acquire);
+        if (holdReq && !holding && playing && audioRunning) enterHold(true);
+
         if (seekTo >= 0) {
             const int64_t p = std::clamp<int64_t>(seekTo, 0, std::max<int64_t>(0, length - 1));
-            if (playing && audioRunning) {
+            if (playing && audioRunning && !holding) {
                 captureXfade();
                 stretchMode = wantStretch;
                 curRate = wantRate; curSemis = wantSemis;
                 if (stretchMode) applyTranspose();
                 startAudioAt(p);
             } else {
+                // Paused, counting in, or held under a finger: only the position moves. Re-priming every
+                // stretcher on each drag event would overrun the audio thread.
                 feedPos = p;
                 armLoop(p);
             }
@@ -415,12 +480,14 @@ struct BLEngine {
         }
 
         if (transport == 2 && playing) {
-            // Pause: fade the current path out over one crossfade, keep the heard position.
-            if (audioRunning) {
+            // Pause: fade the current path out over one crossfade, keep the heard position. A hold is already
+            // silent, so it just ends.
+            if (audioRunning && !holding) {
                 const int64_t heard = heardPosition();
                 captureXfade();
                 feedPos = heard;
             }
+            holding = false;
             playing = false;
             audioRunning = false;
             countInLeft = 0;
@@ -445,8 +512,21 @@ struct BLEngine {
             }
         }
 
+        // Release: restart from the last seek with a single stretcher re-prime. If the entry fade-out is still
+        // running it already crossfades the new audio in, so no separate fade-in.
+        if (!(holdReq && playing) && holding) {
+            holding = false;
+            if (playing && audioRunning) {
+                curRate = wantRate; curSemis = wantSemis;
+                stretchMode = wantStretch;
+                if (stretchMode) applyTranspose();
+                startAudioAt(feedPos);
+                fadeInLeft = xfadeLeft > 0 ? 0 : kXfade;
+            }
+        }
+
         // Rate / pitch changes while audio is running.
-        if (playing && audioRunning) {
+        if (playing && audioRunning && !holding) {
             if (wantStretch != stretchMode) {
                 const int64_t heard = heardPosition();
                 // Old path continues from `heard` for the crossfade; the new one restarts at `heard`.
@@ -483,8 +563,11 @@ struct BLEngine {
             }
         }
 
+        // Play, or the end of the count-in, while a finger is already down: hold before anything sounds.
+        if (holdReq && !holding && playing && audioRunning) enterHold(false);
+
         int64_t clickFrom = -1;
-        if (playing && audioRunning && offset < n) {
+        if (playing && audioRunning && !holding && offset < n) {
             clickFrom = heardPosition();
             renderPath(L + offset, R + offset, n - offset);
             // A fresh start with nothing to crossfade from gets a short fade-in.
@@ -514,13 +597,22 @@ struct BLEngine {
             xfadeLeft -= m;
         }
 
-        if (playing && audioRunning) renderBeatClicks(L, R, n, clickFrom, offset);
+        if (playing && audioRunning && !holding) renderBeatClicks(L, R, n, clickFrom, offset);
+        else if (holding) renderClickTail(L, R, n, 0);
 
         softClipBuffer(L, n);
         softClipBuffer(R, n);
 
+        // Levels: the path's parts were metered in renderPath; the master is what leaves after the clip.
+        if (playing && audioRunning && !holding) {
+            stMaster.store(stereoRMS(L, R, n), std::memory_order_relaxed);
+        } else {
+            for (auto &l : stLevel) l.store(0.0f, std::memory_order_relaxed);
+            stMaster.store(0.0f, std::memory_order_relaxed);
+        }
+
         // End of song (no loop): stop and rewind.
-        if (playing && audioRunning && !(loopOn && loopArmed) && heardPosition() >= length) {
+        if (playing && audioRunning && !holding && !(loopOn && loopArmed) && heardPosition() >= length) {
             playing = false;
             audioRunning = false;
             feedPos = 0;
@@ -550,15 +642,24 @@ void bl_engine_destroy(BLEngine *e) {
 
 bool bl_engine_allocate(BLEngine *e, int stemCount, int64_t frames) {
     if (stemCount < 1 || stemCount > kMaxStems || frames < 1) return false;
+    for (auto &l : e->stLevel) l.store(0.0f, std::memory_order_relaxed);
+    e->stMaster.store(0.0f, std::memory_order_relaxed);
     e->ready.store(false);
     while (e->inRender.load() != 0) std::this_thread::yield();
 
+    // The old song goes before the new one is allocated, so the two are never held at once.
+    for (auto &d : e->data) d.reset();
+    for (int k = 0; k < stemCount * 2; ++k) {
+        e->data[k].reset(static_cast<int16_t *>(std::calloc(size_t(frames), sizeof(int16_t))));
+        if (!e->data[k]) {
+            for (auto &d : e->data) d.reset();
+            e->nStems = 0;
+            e->length = 0;
+            return false;
+        }
+    }
     e->nStems = stemCount;
     e->length = frames;
-    for (int k = 0; k < kMaxStems * 2; ++k) {
-        if (k < stemCount * 2) e->data[k].assign(size_t(frames), 0.0f);
-        else std::vector<float>().swap(e->data[k]);
-    }
     int seekLen = 0;
     for (int s = 0; s < kMaxStems; ++s) {
         e->pitchLocked[s] = false;
@@ -584,6 +685,7 @@ bool bl_engine_allocate(BLEngine *e, int stemCount, int64_t frames) {
     }
     // Reset transport.
     e->playing = e->audioRunning = false;
+    e->holding = false;
     e->feedPos = 0;
     e->inFrac = 0;
     e->loopOn = e->loopArmed = false;
@@ -599,9 +701,9 @@ bool bl_engine_allocate(BLEngine *e, int stemCount, int64_t frames) {
     return true;
 }
 
-float *bl_engine_stem_channel(BLEngine *e, int stem, int channel) {
+int16_t *bl_engine_stem_channel16(BLEngine *e, int stem, int channel) {
     if (stem < 0 || stem >= e->nStems || channel < 0 || channel > 1) return nullptr;
-    return e->data[stem * 2 + channel].data();
+    return e->data[stem * 2 + channel].get();
 }
 
 void bl_engine_set_stem_pitch_locked(BLEngine *e, int stem, bool locked) {
@@ -652,6 +754,7 @@ void bl_engine_set_beat_grid(BLEngine *e, const int64_t *frames, const uint8_t *
 }
 
 void bl_engine_set_click(BLEngine *e, bool enabled) { e->clickOn.store(enabled, std::memory_order_relaxed); }
+void bl_engine_set_hold(BLEngine *e, bool on) { e->holdW.store(on, std::memory_order_release); }
 
 void bl_engine_set_trainer(BLEngine *e, bool enabled, double from, double step, int every, double to) {
     e->trainerFrom.store(from, std::memory_order_relaxed);
@@ -664,6 +767,12 @@ void bl_engine_set_trainer(BLEngine *e, bool enabled, double from, double step, 
 void bl_engine_play(BLEngine *e) { e->pendingTransport.store(1, std::memory_order_release); }
 void bl_engine_pause(BLEngine *e) { e->pendingTransport.store(2, std::memory_order_release); }
 void bl_engine_seek(BLEngine *e, int64_t frame) { e->pendingSeek.store(std::max<int64_t>(0, frame), std::memory_order_release); }
+
+void bl_engine_levels(const BLEngine *e, float *parts, int n, float *master) {
+    for (int s = 0; s < n; ++s)
+        parts[s] = s < kMaxStems && s < e->nStems ? e->stLevel[s].load(std::memory_order_relaxed) : 0.0f;
+    if (master) *master = e->stMaster.load(std::memory_order_relaxed);
+}
 
 BLEngineStatus bl_engine_status(const BLEngine *e) {
     BLEngineStatus s;
@@ -708,6 +817,19 @@ int64_t bl_engine_export(BLEngine *e, const BLExportParams *p, BLExportWrite wri
     const bool identity = isIdentity(rate, semis);
     const int64_t outLen = bl_engine_export_length(e, p);
 
+    const int cap = int(kBlock * kMaxRate) + 64;
+    int seekLen = 0;
+    Stretch st[2];
+    if (!identity) {
+        for (int g = 0; g < 2; ++g) {
+            st[g].presetDefault(2, float(e->sampleRate), false);
+            st[g].setTransposeSemitones(float(g == 0 ? semis : 0.0));
+            seekLen = std::max(seekLen, st[g].outputSeekLength(float(rate)));
+        }
+    }
+    // One part's stretch converted to float before it is mixed in.
+    std::vector<float> part(size_t(std::max({cap, seekLen, kBlock})));
+
     // Mix stems into two groups (transposed / pitch-locked) with static gains.
     auto mixGroup = [&](int group, int64_t pos, int n, float *L, float *R) {
         std::memset(L, 0, sizeof(float) * size_t(n));
@@ -718,8 +840,10 @@ int64_t bl_engine_export(BLEngine *e, const BLExportParams *p, BLExportWrite wri
             if ((group == 1) != e->pitchLocked[s]) continue;
             float g = s < p->gainCount ? p->gains[s] : 0.0f;
             if (g == 0.0f) continue;
-            vDSP_vsma(e->data[2 * s].data() + pos, 1, &g, L, 1, L, 1, vDSP_Length(avail));
-            vDSP_vsma(e->data[2 * s + 1].data() + pos, 1, &g, R, 1, R, 1, vDSP_Length(avail));
+            toFloat(e->data[2 * s].get() + pos, part.data(), avail);
+            vDSP_vsma(part.data(), 1, &g, L, 1, L, 1, vDSP_Length(avail));
+            toFloat(e->data[2 * s + 1].get() + pos, part.data(), avail);
+            vDSP_vsma(part.data(), 1, &g, R, 1, R, 1, vDSP_Length(avail));
         }
     };
 
@@ -742,14 +866,6 @@ int64_t bl_engine_export(BLEngine *e, const BLExportParams *p, BLExportWrite wri
         return produced;
     }
 
-    Stretch st[2];
-    const int cap = int(kBlock * kMaxRate) + 64;
-    int seekLen = 0;
-    for (int g = 0; g < 2; ++g) {
-        st[g].presetDefault(2, float(e->sampleRate), false);
-        st[g].setTransposeSemitones(float(g == 0 ? semis : 0.0));
-        seekLen = std::max(seekLen, st[g].outputSeekLength(float(rate)));
-    }
     std::vector<float> in[2][2], out[2][2];
     for (int g = 0; g < 2; ++g)
         for (int c = 0; c < 2; ++c) {

@@ -1,0 +1,47 @@
+# Builds the app and runs the BacklineKit tests on GitHub's macOS runners.
+# Git LFS bandwidth counts against the repository owner's monthly quota: checkout never fetches LFS, and
+# the objects are restored from the Actions cache, keyed on their ids, so they are downloaded again only
+# when a model, font or bundled tool changes.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and BacklineKit tests
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: List LFS objects
+        run: git lfs ls-files --long | cut -d ' ' -f1 | sort > .lfs-ids
+      - name: Restore LFS objects
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ hashFiles('.lfs-ids') }}
+      - run: git lfs pull
+      - name: Tools
+        run: |
+          brew install xcodegen
+          xcodebuild -version
+      - run: xcodegen generate
+      - name: Build
+        run: |
+          xcodebuild build -project Backline.xcodeproj -scheme Backline -configuration Debug \
+            -derivedDataPath build/dd CODE_SIGNING_ALLOWED=NO
+      - name: BacklineKit tests
+        run: swift test --package-path BacklineKit

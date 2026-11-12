@@ -1,6 +1,8 @@
 import AVFoundation
+import Accelerate
 import BacklineEngine
 import Foundation
+import Synchronization
 
 /// Owns the C++ stem engine and the AVAudioEngine that pulls audio from it.
 ///
@@ -18,6 +20,13 @@ public final class PlaybackEngine: @unchecked Sendable {
     private let drivesOutput: Bool
 
     private var configObserver: NSObjectProtocol?
+    /// Output latency in frames. Asking the output node every display frame queries the audio hardware, so it is
+    /// read when output starts, on Play and after a route change.
+    private let latencyFrames = Atomic<Int64>(0)
+
+    private func refreshLatency() {
+        latencyFrames.store(engine.isRunning ? Int64(engine.outputNode.presentationLatency * sampleRate) : 0, ordering: .relaxed)
+    }
 
     public init(sampleRate: Double = 44_100, drivesOutput: Bool = true) {
         self.sampleRate = sampleRate
@@ -48,6 +57,7 @@ public final class PlaybackEngine: @unchecked Sendable {
                 if wasPlaying {
                     do { try self.engine.start() } catch { bl_engine_pause(self.core) }
                 }
+                self.refreshLatency()
             }
         }
     }
@@ -72,16 +82,18 @@ public final class PlaybackEngine: @unchecked Sendable {
         }
     }
 
-    /// Loads stems (planar stereo, all the same length). `pitchLocked` stems are never transposed.
+    /// Loads stems (planar stereo, all the same length). `pitchLocked` stems are never transposed. The engine
+    /// holds 16 bits per sample, so each sample is rounded to the nearest step of 1/32768 (`quantise`); audio
+    /// read from a 16-bit file is already on those steps and goes in unchanged.
     public func load(stems: [StereoAudio], pitchLocked: [Bool]) {
         let frames = stems.map(\.frameCount).max() ?? 0
         guard frames > 0, bl_engine_allocate(raw, Int32(stems.count), Int64(frames)) else { return }
         for (i, s) in stems.enumerated() {
-            if let l = bl_engine_stem_channel(raw, Int32(i), 0) {
-                s.left.withUnsafeBufferPointer { if let b = $0.baseAddress { l.update(from: b, count: s.frameCount) } }
+            if let l = bl_engine_stem_channel16(raw, Int32(i), 0) {
+                s.left.withUnsafeBufferPointer { if let b = $0.baseAddress { Self.quantise(b, to: l, count: s.frameCount) } }
             }
-            if let r = bl_engine_stem_channel(raw, Int32(i), 1) {
-                s.right.withUnsafeBufferPointer { if let b = $0.baseAddress { r.update(from: b, count: s.frameCount) } }
+            if let r = bl_engine_stem_channel16(raw, Int32(i), 1) {
+                s.right.withUnsafeBufferPointer { if let b = $0.baseAddress { Self.quantise(b, to: r, count: s.frameCount) } }
             }
             bl_engine_set_stem_pitch_locked(raw, Int32(i), i < pitchLocked.count ? pitchLocked[i] : false)
         }
@@ -97,20 +109,51 @@ public final class PlaybackEngine: @unchecked Sendable {
         length = Int64(frames)
         return true
     }
-    public func channelPointer(stem: Int, channel: Int) -> UnsafeMutablePointer<Float>? {
-        bl_engine_stem_channel(raw, Int32(stem), Int32(channel))
+    /// One channel of a stem for filling: 16-bit samples, full scale 32768 (a 16-bit file's own samples).
+    public func channelPointer(stem: Int, channel: Int) -> UnsafeMutablePointer<Int16>? {
+        bl_engine_stem_channel16(raw, Int32(stem), Int32(channel))
+    }
+
+    /// Float samples to the engine's 16 bits: × 32768, rounded to nearest, clipped to −32768…32767. Exact for
+    /// audio that came from a 16-bit file.
+    public static func quantise(_ src: UnsafePointer<Float>, to dst: UnsafeMutablePointer<Int16>, count: Int) {
+        let chunk = 1 << 14
+        var scratch = [Float](repeating: 0, count: min(chunk, max(count, 1)))
+        var scale: Float = 32768, lo: Float = -32768, hi: Float = 32767
+        scratch.withUnsafeMutableBufferPointer { t in
+            var pos = 0
+            while pos < count {
+                let n = min(chunk, count - pos)
+                vDSP_vsmul(src + pos, 1, &scale, t.baseAddress!, 1, vDSP_Length(n))
+                vDSP_vclip(t.baseAddress!, 1, &lo, &hi, t.baseAddress!, 1, vDSP_Length(n))
+                vDSP_vfixr16(t.baseAddress!, 1, dst + pos, 1, vDSP_Length(n))
+                pos += n
+            }
+        }
     }
     public func setPitchLocked(stem: Int, _ locked: Bool) { bl_engine_set_stem_pitch_locked(raw, Int32(stem), locked) }
     public func commit() { bl_engine_commit(raw) }
 
     public func startOutput() throws {
         if drivesOutput && !engine.isRunning { try engine.start() }
+        refreshLatency()
     }
     public func stopOutput() { engine.pause() }
 
-    public func play() { try? startOutput(); bl_engine_play(raw) }
+    /// Starts the sound. False when the audio output couldn't start: the transport stays stopped rather
+    /// than counting time in silence (owner's report, 22 Oct).
+    @discardableResult public func play() -> Bool {
+        if drivesOutput {
+            do { try startOutput() } catch { return false }
+            guard engine.isRunning else { return false }
+        }
+        bl_engine_play(raw)
+        return true
+    }
     public func pause() { bl_engine_pause(raw) }
     public func seek(frame: Int64) { bl_engine_seek(raw, frame) }
+    /// While a finger scrubs: silent, and seeks are cheap. Release plays on from the last seek.
+    public func setHold(_ on: Bool) { bl_engine_set_hold(raw, on) }
     public func setGain(stem: Int, _ gain: Float) { bl_engine_set_stem_gain(raw, Int32(stem), gain) }
     public func setRate(_ rate: Double) { bl_engine_set_rate(raw, rate) }
     public func setSemitones(_ s: Double) { bl_engine_set_semitones(raw, s) }
@@ -140,12 +183,27 @@ public final class PlaybackEngine: @unchecked Sendable {
         public var loopPasses: UInt32
         public var reachedEnd: Bool
         public var rate: Double
+
+        public init(position: Int64, playing: Bool, countInBeat: Int = 0, loopPasses: UInt32 = 0,
+                    reachedEnd: Bool = false, rate: Double = 1) {
+            self.position = position; self.playing = playing; self.countInBeat = countInBeat
+            self.loopPasses = loopPasses; self.reachedEnd = reachedEnd; self.rate = rate
+        }
     }
 
     /// Output-latency compensated status. Safe to poll at display rate.
+    /// Levels of the last render block (AD-11): fills `parts` (one entry per part, its gain included, 0 for
+    /// parts that are off) and returns the master. All 0 while paused, counting in or holding. Cheap: a few
+    /// relaxed atomic loads, safe from any thread.
+    public func levels(into parts: inout [Float]) -> Float {
+        var master: Float = 0
+        parts.withUnsafeMutableBufferPointer { bl_engine_levels(raw, $0.baseAddress, Int32($0.count), &master) }
+        return master
+    }
+
     public var status: Status {
         let s = bl_engine_status(raw)
-        let hw = engine.isRunning ? Int64(engine.outputNode.presentationLatency * sampleRate) : 0
+        let hw = engine.isRunning ? latencyFrames.load(ordering: .relaxed) : 0
         return Status(position: max(0, s.position - (s.playing ? hw : 0)), playing: s.playing,
                       countInBeat: Int(s.countInBeat), loopPasses: s.loopPasses, reachedEnd: s.reachedEnd, rate: s.rate)
     }

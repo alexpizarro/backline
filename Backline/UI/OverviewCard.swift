@@ -30,12 +30,13 @@ struct SectionStrip: View {
 
     var body: some View {
         GeometryReader { geo in
-            let dur = max(model.duration, 0.001)
+            let sections = model.sections
             let current = model.currentLoopSection
+            // Each chip sits exactly over its section on the Map, at any zoom (U07: they share `mapWindow`).
             ZStack(alignment: .topLeading) {
-                ForEach(model.sections) { s in
-                    let x = geo.size.width * s.start / dur
-                    let w = geo.size.width * (s.end - s.start) / dur
+                ForEach(model.mapWindow.tapeFrames(sections.map { $0.start...$0.end }, width: geo.size.width), id: \.index) { f in
+                    let s = sections[f.index]
+                    let x = f.x, w = f.width
                     let active = current?.id == s.id || (current.map { abs($0.start - s.start) < 0.01 } ?? false)
                     SectionChip(section: s, active: active, isEditing: editing == s.id, draft: $draft,
                                 onTap: { model.loopSection(s) },
@@ -100,147 +101,82 @@ struct SectionChip: View {
         .onTapGesture(count: 1, perform: onTap)
         .onHover { hover = $0 }
         .help("Loop \(section.label) · double-click to rename")
-        .animation(.easeOut(duration: 0.15), value: active)
+        .motion(.easeOut(duration: 0.15), value: active)
     }
 }
 
+/// The big waveform (the Map). The pointer's gestures are AppKit's (`MapView`), and the playhead and played colour
+/// come from the transport clock on the GPU, so this view never re-renders while the song plays or while the
+/// pointer scrubs (UIP-07). The hover readout is the only SwiftUI state that moves, and only under a still mouse.
 struct OverviewWaveform: View {
     @Environment(AppModel.self) private var model
-    @State private var dragMode: DragMode?
-    @State private var hoverX: CGFloat?
+    @State private var hover: Hover?
 
-    enum DragMode { case scrub, loopStart, loopEnd, newLoop(Double), barPending(Double) }
+    struct Hover: Equatable { var time: Double; var x: CGFloat }
 
     var body: some View {
-        GeometryReader { geo in
-            let width = geo.size.width
-            let dur = max(model.duration, 0.001)
-            let bars = model.mixBars(count: max(20, Int(width / 4)))
-            ZStack(alignment: .topLeading) {
-                // Loop region
-                if model.settings.loopEnabled, let r = model.loopRange {
-                    let x0 = width * r.lowerBound / dur, x1 = width * r.upperBound / dur
-                    Rectangle()
-                        .fill(Theme.magenta.opacity(0.10))
-                        .overlay(alignment: .leading) { LoopHandle() }
-                        .overlay(alignment: .trailing) { LoopHandle() }
-                        .frame(width: max(2, x1 - x0), height: geo.size.height + 8)
-                        .offset(x: x0, y: -4)
-                        .transition(.opacity)
-                }
-                GridLines(times: model.gridLines, duration: dur, emphasise: model.mode == .dance)
-                    .allowsHitTesting(false)
-                WaveformBars(bars: bars, progress: model.position / dur)
-                    .animation(.smooth(duration: 0.25), value: bars)
-                // Hover time readout
-                if let hx = hoverX, dragMode == nil {
-                    Rectangle().fill(Color.white.opacity(0.18)).frame(width: 1, height: geo.size.height)
-                        .offset(x: hx)
-                    Text(formatTime(Double(hx / width) * dur))
+        let dur = max(model.duration, 0.001)
+        let loop = model.settings.loopEnabled ? model.loopRange : nil
+        let visible = model.mapWindow
+        MapRepresentable(
+            config: WaveformConfig(
+                // The stored envelope's full resolution, so a zoomed view stays sharp.
+                values: model.mixBars(count: 1600), normalize: false,
+                barColor: Theme.tokens.waveIdle, playedColor: Theme.tokens.wavePlayed,
+                minBarHeight: 3, barPitch: 4, gap: 2, verticalInset: 6,
+                loop: loop, loopFill: Theme.tokens.loopFill, loopEdge: Theme.tokens.loopEdge,
+                showLoopHandles: model.settings.loopEnabled,
+                grid: model.gridLines, gridColor: Theme.ink, gridAlpha: model.mode == .dance ? 0.10 : 0.07,
+                duration: dur, showPlayhead: true, playheadColor: Theme.tokens.playhead, playheadWidth: 2.5, glow: 0.5,
+                litColor: Theme.tokens.waveLit, playheadKnob: true, glowFollowsLevel: true, dark: Theme.isDark),
+            duration: dur, loopRange: loop, visible: visible, plainDragDrawsLoop: model.mode == .beats, model: model,
+            onHover: { t, x in
+                let next = t.map { Hover(time: $0, x: x) }
+                if next != hover { hover = next }
+            })
+        .overlay(alignment: .topLeading) {
+            // Hover time readout.
+            if let hover {
+                GeometryReader { g in
+                    Rectangle().fill(Theme.ink.opacity(0.18)).frame(width: 1, height: g.size.height)
+                        .offset(x: hover.x)
+                    Text(formatTime(hover.time))
                         .font(Typo.mono(10.5))
                         .foregroundStyle(Theme.ink2)
                         .padding(.horizontal, 5).padding(.vertical, 2)
                         .background(RoundedRectangle(cornerRadius: 4).fill(Theme.cardHover))
-                        .offset(x: min(max(0, hx - 18), width - 40), y: -2)
-                        .allowsHitTesting(false)
+                        .offset(x: min(max(0, hover.x - 18), g.size.width - 40), y: -2)
                 }
-                // Playhead
-                Rectangle()
-                    .fill(Theme.ink)
-                    .frame(width: 2, height: geo.size.height + 12)
-                    .shadow(color: .white.opacity(0.5), radius: 3)
-                    .offset(x: width * model.position / dur - 1, y: -6)
-                    .allowsHitTesting(false)
-            }
-            .contentShape(Rectangle())
-            .gesture(dragGesture(width: width, dur: dur))
-            .onContinuousHover { phase in
-                switch phase {
-                case .active(let p): hoverX = p.x
-                case .ended: hoverX = nil
-                }
+                .allowsHitTesting(false)
             }
         }
+        .overlay(alignment: .bottomLeading) {
+            // Zoomed: a thin bar shows which part of the song is on screen.
+            if visible.isZoomed {
+                GeometryReader { g in
+                    Capsule().fill(Theme.ink3)
+                        .frame(width: max(10, g.size.width * visible.length / visible.duration), height: 2)
+                        .offset(x: g.size.width * visible.start / visible.duration, y: g.size.height - 3)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+        }
+        .help(model.mode == .beats ? "Drag to loop bars · click to jump · pinch to zoom"
+              : "Click to jump · drag to move through the song · Option-drag to loop · pinch to zoom")
         .accessibilityElement()
         .accessibilityLabel("Song overview")
-        .accessibilityValue("\(formatTime(model.position)) of \(formatTime(model.duration))")
+        .accessibilityValue("\(model.timeText.elapsed) of \(formatTime(model.duration))")
         .accessibilityAdjustableAction { dir in
             model.nudge(bars: dir == .increment ? 1 : -1)
         }
-    }
-
-    func dragGesture(width: CGFloat, dur: Double) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { v in
-                let t = Double(max(0, min(width, v.location.x)) / width) * dur
-                if dragMode == nil {
-                    let startT = Double(max(0, min(width, v.startLocation.x)) / width) * dur
-                    let tol = Double(8 / width) * dur
-                    if model.settings.loopEnabled, let r = model.loopRange, abs(startT - r.lowerBound) < tol {
-                        dragMode = .loopStart
-                    } else if model.settings.loopEnabled, let r = model.loopRange, abs(startT - r.upperBound) < tol {
-                        dragMode = .loopEnd
-                    } else if model.mode == .beats {
-                        dragMode = .barPending(startT)
-                    } else if NSEvent.modifierFlags.contains(.option) {
-                        dragMode = .newLoop(model.snapToBeat(startT))
-                    } else {
-                        dragMode = .scrub
-                    }
-                }
-                switch dragMode {
-                case .scrub: model.isScrubbing = true; model.seek(to: t)
-                case .loopStart:
-                    if let r = model.loopRange { model.setLoop(start: snap(min(t, r.upperBound - 0.5)), end: r.upperBound) }
-                case .loopEnd:
-                    if let r = model.loopRange { model.setLoop(start: r.lowerBound, end: snap(max(t, r.lowerBound + 0.5))) }
-                case .barPending(let start):
-                    // Beats: a real drag (not a click) becomes a loop from bar line to bar line.
-                    if abs(v.location.x - v.startLocation.x) > 6 {
-                        dragMode = .newLoop(model.snapToBarLine(start))
-                    }
-                case .newLoop(let a):
-                    let b = snap(t)
-                    if abs(b - a) > 0.5 { model.setLoop(start: min(a, b), end: max(a, b)) }
-                case .none: break
-                }
+        .accessibilityActions {
+            if model.playheadSection != nil {
+                Button("Loop this section") { model.toggleSectionLoop() }
             }
-            .onEnded { v in
-                if case .barPending = dragMode {
-                    model.seek(to: Double(max(0, min(width, v.location.x)) / width) * dur)
-                }
-                if case .newLoop = dragMode, let r = model.loopRange { model.seek(to: r.lowerBound) }
-                model.isScrubbing = false
-                dragMode = nil
+            if visible.isZoomed {
+                Button("Show the whole song") { model.mapWindow = .whole(model.duration) }
             }
-    }
-}
-
-extension OverviewWaveform {
-    /// Loop edges snap to bar lines in Beats and to beats elsewhere.
-    func snap(_ t: Double) -> Double { model.mode == .beats ? model.snapToBarLine(t) : model.snapToBeat(t) }
-}
-
-/// Thin lines on the waveform: every eight (Dance) or every bar (Beats).
-struct GridLines: View {
-    let times: [Double]
-    let duration: Double
-    var emphasise = false
-
-    var body: some View {
-        Canvas { ctx, size in
-            guard !times.isEmpty, duration > 0 else { return }
-            // Keep at least 5 px between lines: skip some when zoomed out.
-            let minGap: CGFloat = 5
-            var lastX: CGFloat = -.infinity
-            var path = Path()
-            for t in times {
-                let x = size.width * t / duration
-                guard x - lastX >= minGap else { continue }
-                path.addRect(CGRect(x: x, y: 0, width: 1, height: size.height))
-                lastX = x
-            }
-            ctx.fill(path, with: .color(Color.white.opacity(emphasise ? 0.10 : 0.07)))
         }
     }
 }
@@ -279,10 +215,12 @@ struct CountStrip: View {
     }
 
     private var counts: some View {
-        let current = model.currentCount
+        // Published only when the count or the bar changes (UIP-11), not at the transport's 30 Hz.
+        let beat = model.playheadBeat
+        let current = beat.count
         let n = model.countsPerCycle
         return HStack(spacing: 4) {
-            if model.mode == .beats, let bar = model.currentBar {
+            if model.mode == .beats, let bar = beat.bar {
                 Text("Bar \(bar)")
                     .font(Typo.mono(11, .semibold))
                     .foregroundStyle(Theme.ink2)
@@ -298,7 +236,7 @@ struct CountStrip: View {
                     .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .fill(on ? (i == 1 ? Theme.magenta : Theme.primary) : Theme.card))
                     .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(Theme.hairline2))
-                    .animation(.easeOut(duration: 0.08), value: on)
+                    .motion(.easeOut(duration: 0.08), value: on)
             }
             Spacer(minLength: 8)
             Menu {
@@ -321,53 +259,5 @@ struct CountStrip: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(current.map { "Count \($0)" } ?? "Counts")
-    }
-}
-
-struct LoopHandle: View {
-    @State private var hover = false
-    var body: some View {
-        Rectangle()
-            .fill(Theme.magenta)
-            .frame(width: hover ? 3 : 1.5)
-            .overlay {
-                Capsule().fill(Theme.magenta).frame(width: 6, height: 14).opacity(hover ? 1 : 0)
-            }
-            .frame(width: 12)
-            .contentShape(Rectangle())
-            .onHover { h in
-                hover = h
-                if h { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
-            }
-            .animation(.easeOut(duration: 0.12), value: hover)
-    }
-}
-
-/// Bars 2 px apart, radius 1; played portion in violet.
-struct WaveformBars: View, Animatable {
-    var bars: [Float]
-    var progress: Double
-    var played = Theme.primaryHover
-    var unplayed = Theme.muted.opacity(0.45)
-    var minHeight: CGFloat = 3
-
-    var body: some View {
-        Canvas { ctx, size in
-            guard !bars.isEmpty else { return }
-            let gap: CGFloat = 2
-            let w = max(1, (size.width - gap * CGFloat(bars.count - 1)) / CGFloat(bars.count))
-            let cut = size.width * progress
-            var playedPath = Path(), restPath = Path()
-            for (i, v) in bars.enumerated() {
-                let x = CGFloat(i) * (w + gap)
-                let h = max(minHeight, CGFloat(v) * size.height)
-                let r = CGRect(x: x, y: (size.height - h) / 2, width: w, height: h)
-                let p = Path(roundedRect: r, cornerRadius: min(1, w / 2))
-                if x + w / 2 < cut { playedPath.addPath(p) } else { restPath.addPath(p) }
-            }
-            ctx.fill(restPath, with: .color(unplayed))
-            ctx.fill(playedPath, with: .color(played))
-        }
-        .drawingGroup()
     }
 }

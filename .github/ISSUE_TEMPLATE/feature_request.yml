@@ -1,0 +1,22 @@
+name: Idea
+description: Something Backline could do for the way you practise.
+labels: [idea]
+body:
+  - type: dropdown
+    id: mode
+    attributes:
+      label: How you practise
+      options:
+        - Play an instrument
+        - Dance
+        - Rap or sing
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you'd like Backline to do
+      description: Tell us the moment in your practice where you miss it, more than the button you imagine.
+    validations:
+      required: true

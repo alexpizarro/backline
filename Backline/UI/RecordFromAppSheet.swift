@@ -1,8 +1,9 @@
 import AppKit
 import BacklineKit
+import CoreAudio
 import SwiftUI
 
-/// "Record from an app…": capture the song as it plays in another app on this Mac (process tap,
+/// "Record from an app": capture the song as it plays in another app on this Mac (process tap,
 /// System Audio Recording permission), then split it like a dropped file. Real time only — no downloading.
 @MainActor @Observable
 final class RecordFromAppModel {
@@ -130,43 +131,147 @@ final class RecordFromAppModel {
     }
 }
 
+/// Record: a song playing in another app on this Mac (process tap), or the sound in the room through a
+/// microphone or an audio interface (`MicRecorder`, ported from iOS). Either way the take is split like a
+/// dropped file.
 struct RecordFromAppSheet: View {
+    enum Source: String, CaseIterable, Identifiable {
+        case app, microphone
+        var id: String { rawValue }
+        var title: String { self == .app ? "Another app" : "Microphone" }
+    }
+
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
     @State private var rec = RecordFromAppModel()
+    @State private var mic = MicRecorder()
+    @State private var confirmDiscard = false
+    /// The choice used last time (a convenience; the sheet works the same without it).
+    @AppStorage("recordSource") private var sourceRaw = Source.app.rawValue
 
     static let privacyURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture")!
 
+    private var source: Source { Source(rawValue: sourceRaw) ?? .app }
+    private var busy: Bool {
+        mic.isBusy || [.starting, .waitingForSound, .recording].contains(rec.phase)
+    }
+    /// A take is being recorded or saved: Quit asks first (`AppDelegate.quitQuestion`).
+    private var recording: Bool { mic.isBusy || rec.phase == .recording }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Record a song playing on your Mac")
+            Text("Record a song")
                 .font(Typo.ui(16, .bold)).foregroundStyle(Theme.ink)
-            content
+            Picker("Record from", selection: Binding(get: { source }, set: { switchTo($0) })) {
+                ForEach(Source.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(busy)
+            Group {
+                switch source {
+                case .app: content
+                case .microphone: MicrophonePanel(mic: mic)
+                }
+            }
+            .frame(minHeight: 150, alignment: .top)
             Text("For practice only. Only record music you're allowed to use. Recordings stay on your Mac.")
                 .font(Typo.ui(11)).foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 HelpButton(topic: .record)
                 Spacer()
-                Button("Cancel") { rec.cancel(); dismiss() }
-                    .buttonStyle(SecondaryButtonStyle(padding: EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14)))
-                    .keyboardShortcut(.cancelAction)
-                primaryButton
+                Button("Cancel") {
+                    if mic.isRecording { confirmDiscard = true } else { close() }
+                }
+                .buttonStyle(SecondaryButtonStyle(padding: EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14)))
+                .keyboardShortcut(.cancelAction)
+                switch source {
+                case .app: primaryButton
+                case .microphone: micButtons
+                }
             }
         }
         .padding(22)
-        .frame(width: 420)
+        .frame(width: 440)
         .background(Theme.card)
-        .preferredColorScheme(.dark)
-        .onAppear {
-            rec.onFinished = { url, title in
-                dismiss()
-                app.importTitleOverride = title
-                app.open(url)
-            }
-            rec.begin()
+        .confirmationDialog("Throw this recording away?", isPresented: $confirmDiscard) {
+            Button("Throw Away", role: .destructive) { close() }
+            Button("Keep Recording", role: .cancel) {}
         }
-        .onDisappear { rec.cancel() }
+        .onAppear {
+            // One import at a time (ios-import#3): refused before anything is recorded, never after. A link that
+            // "Record instead" has just cancelled is on its way out, not another song.
+            if app.importUnderWay, !app.importCancelled {
+                app.showToast(.init(text: "Still splitting another song."))
+                dismiss()
+                return
+            }
+            rec.onFinished = { url, title in finish(url, title) }
+            mic.onFinished = { url, title in finish(url, title) }
+            switch source {
+            case .app: rec.begin()
+            case .microphone: mic.begin()
+            }
+        }
+        .onChange(of: recording, initial: true) { _, now in app.recordingUnderWay = now }
+        .onDisappear { app.recordingUnderWay = false; rec.cancel(); mic.cancel() }
+    }
+
+    private func switchTo(_ new: Source) {
+        guard new != source, !busy else { return }
+        sourceRaw = new.rawValue
+        switch new {
+        case .app: mic.cancel(); rec.begin()
+        case .microphone: rec.cancel(); mic.begin()
+        }
+    }
+
+    private func finish(_ url: URL, _ title: String) {
+        dismiss()
+        app.importTitleOverride = title
+        app.openTake(url)
+    }
+
+    private func close() {
+        rec.cancel()
+        mic.cancel()
+        dismiss()
+    }
+
+    private static let buttonPadding = EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
+
+    @ViewBuilder private var micButtons: some View {
+        switch (mic.permission, mic.phase) {
+        case (.undetermined, _):
+            Button("Allow Microphone") { Task { await mic.requestPermission() } }
+                .buttonStyle(PrimaryButtonStyle(padding: Self.buttonPadding))
+                .keyboardShortcut(.defaultAction)
+        case (.denied, _):
+            Button("Try Again") { mic.cancel(); mic.begin() }
+                .buttonStyle(PrimaryButtonStyle(padding: Self.buttonPadding))
+        case (_, .recording):
+            Button("Stop & Split") { Task { await mic.stopAndFinish() } }
+                .buttonStyle(PrimaryButtonStyle(padding: Self.buttonPadding))
+                .keyboardShortcut(.defaultAction)
+        case (_, .interrupted):
+            Button("Use What I Have") { Task { await mic.stopAndFinish() } }
+                .buttonStyle(SecondaryButtonStyle(padding: EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14)))
+            Button("Resume") { mic.resume() }
+                .buttonStyle(PrimaryButtonStyle(padding: Self.buttonPadding))
+                .keyboardShortcut(.defaultAction)
+        case (_, .failed):
+            Button("Try Again") { mic.reset() }
+                .buttonStyle(PrimaryButtonStyle(padding: Self.buttonPadding))
+                .keyboardShortcut(.defaultAction)
+        case (_, .finishing), (_, .finished):
+            EmptyView()
+        default:
+            Button("Record") { mic.startRecording() }
+                .buttonStyle(PrimaryButtonStyle(padding: Self.buttonPadding))
+                .keyboardShortcut(.defaultAction)
+                .disabled(mic.phase != .monitoring)
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -241,6 +346,121 @@ struct RecordFromAppSheet: View {
                 .buttonStyle(PrimaryButtonStyle(padding: EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)))
         case .starting:
             EmptyView()
+        }
+    }
+}
+
+/// The Microphone choice: which input, its level, the time, and how the take is going.
+private struct MicrophonePanel: View {
+    let mic: MicRecorder
+
+    var body: some View {
+        switch (mic.permission, mic.phase) {
+        case (.denied, _):
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Backline can't use the microphone.", systemImage: "mic.slash")
+                    .font(Typo.ui(13, .semibold)).foregroundStyle(Theme.ink)
+                Text("Click Open Privacy Settings and turn on Backline. Then click Try Again.")
+                    .font(Typo.ui(12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+                Button("Open Privacy Settings") { MicRecorder.openSettings() }
+                    .buttonStyle(SecondaryButtonStyle())
+            }
+        case (.undetermined, _):
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Record a band, a speaker or a rehearsal", systemImage: "mic")
+                    .font(Typo.ui(13, .semibold)).foregroundStyle(Theme.ink)
+                Text("Use your Mac's microphone, a USB microphone or an audio interface. Backline only listens while this window is open.")
+                    .font(Typo.ui(12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            }
+        case (_, .failed(let failure)):
+            failureView(failure)
+        default:
+            recorder
+        }
+    }
+
+    private var recorder: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker("Input", selection: Binding(get: { mic.selectedInputID ?? kAudioObjectUnknown },
+                                               set: { mic.selectInput($0 == kAudioObjectUnknown ? nil : $0) })) {
+                Text("Same as your Mac").tag(kAudioObjectUnknown)
+                ForEach(mic.inputs) { input in
+                    Text(input.channels > 2 ? "\(input.name) · \(input.channels) inputs" : input.name).tag(input.id)
+                }
+            }
+            .font(Typo.ui(12.5))
+            .disabled(mic.isBusy)
+
+            VStack(spacing: 10) {
+                HStack(spacing: 6) {
+                    Image(systemName: mic.isStereo ? "waveform.badge.mic" : "mic.fill").font(.system(size: 11, weight: .semibold))
+                    Text(mic.inputName + (mic.isStereo ? " · Stereo" : "")).font(Typo.ui(12, .medium)).lineLimit(1)
+                    Spacer(minLength: 0)
+                    if mic.isRecording {
+                        Text("REC").font(Typo.mono(11, .bold)).foregroundStyle(Theme.danger)
+                    }
+                }
+                .foregroundStyle(Theme.ink3)
+                LEDMeter(peakDB: mic.peakDB, active: mic.phase == .monitoring || mic.phase == .recording)
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.elevated))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.hairline3))
+
+            HStack(alignment: .firstTextBaseline) {
+                Text(formatTime(mic.elapsed)).font(Typo.mono(28, .semibold))
+                    .foregroundStyle(mic.isRecording ? Theme.ink : Theme.ink3)
+                    .accessibilityLabel("Time recorded")
+                Spacer()
+                if mic.isRecording { Text("Max 20 min.").font(Typo.ui(11.5)).foregroundStyle(Theme.muted) }
+            }
+            status
+        }
+    }
+
+    @ViewBuilder private var status: some View {
+        Group {
+            switch mic.phase {
+            case .recording:
+                switch mic.quality {
+                case .waitingForSound: StatusLine(tone: .live, text: "Recording. Start the song.")
+                case .good: StatusLine(tone: .live, text: "Recording")
+                case .faint: StatusLine(tone: .warning, text: "A bit quiet. Move closer or turn the input up.")
+                case .tooQuiet: StatusLine(tone: .warning, text: "Too quiet. Turn it up.")
+                case .silent: StatusLine(tone: .warning, text: "No sound. Is the right input picked?")
+                }
+            case .interrupted:
+                StatusLine(tone: .warning, text: "The input went away. Plug it back in and click Resume.")
+            case .finishing:
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Trimming…").font(Typo.ui(13, .semibold)).foregroundStyle(Theme.ink2)
+                }
+            case .finished:
+                StatusLine(tone: .good, text: "Done")
+            default:
+                StatusLine(tone: .idle, text: "Click Record, then start the song.")
+            }
+        }
+        .animation(.smooth(duration: 0.2), value: mic.quality)
+        .animation(.smooth(duration: 0.2), value: mic.phase)
+    }
+
+    @ViewBuilder private func failureView(_ failure: MicRecorder.Failure) -> some View {
+        switch failure {
+        case .nothingHeard:
+            failureLabel("No music heard.", "Get closer and record at least 10 s.", symbol: "speaker.slash")
+        case .noInput:
+            failureLabel("No microphone found.", "Plug one in, or pick another input.", symbol: "mic.slash")
+        case .engine(let message):
+            failureLabel("Couldn't record.", message, symbol: "exclamationmark.triangle")
+        }
+    }
+
+    private func failureLabel(_ title: String, _ message: String, symbol: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(title, systemImage: symbol).font(Typo.ui(13, .semibold)).foregroundStyle(Theme.ink)
+            Text(message).font(Typo.ui(12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
         }
     }
 }

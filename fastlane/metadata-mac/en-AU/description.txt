@@ -1,0 +1,26 @@
+Backline is a practice player for musicians, dancers and singers. Pick a song, split it into parts on your Mac, and practise.
+
+Everything happens on your Mac. Nothing is uploaded, there's no account, and Backline doesn't track you.
+
+THREE WAYS TO PRACTISE
+• Play — mute or solo any part, even just the lead guitar, and play along with the band.
+• Dance — built for bachata and salsa. Hear the güira or any one instrument on its own, tap on the 1, and Backline counts to 8 for you.
+• Beats — the vocals come out and the drums split into kick, snare and hi-hats, so you can rap or sing over the beat.
+
+WHAT YOU CAN DO
+• Mute or solo vocals, drums, bass, guitars, keys and other instruments.
+• Split the lead and rhythm guitar apart.
+• Split the drum kit into kick, snare, hi-hats and other drums (an optional one-time download).
+• Slow a song down or speed it up without losing pitch.
+• Shift the pitch by frets.
+• Loop any section and add a count-in.
+• Save the result as a backing track.
+
+GETTING SONGS IN
+Drop in an audio or video file, record a song while it plays in another app, record a band with a microphone or an audio interface, or paste a link to a song or video. Backline keeps everything on your Mac.
+
+Free. No ads, no in-app purchases, no account, no tracking. Open source. Requires macOS 15.0 or later on a Mac with Apple silicon.
+
+Demo music in our screenshots: Kevin MacLeod (incompetech.com), licensed under Creative Commons BY.
+
+Privacy policy: https://backlinestems.com/privacy/

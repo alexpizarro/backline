@@ -4,14 +4,20 @@ import XCTest
 final class EngineTests: XCTestCase {
     let sr = 44_100.0
 
-    /// Stem i is a sine at a distinct frequency so we can check what's audible.
+    /// Stem i is a sine at a distinct frequency so we can check what's audible. On 16-bit steps, as a part read
+    /// from disk is (the engine holds 16 bits, D3), so the exact-mix checks compare like with like.
     func makeStems(seconds: Double = 6) -> [StereoAudio] {
         let n = Int(seconds * sr)
         return (0..<3).map { i in
             let f = 220.0 * Double(i + 1)
-            let x = (0..<n).map { Float(0.2 * sin(2 * .pi * f * Double($0) / sr)) }
+            let x = Self.on16Bits((0..<n).map { Float(0.2 * sin(2 * .pi * f * Double($0) / sr)) })
             return StereoAudio(left: x, right: x, sampleRate: sr)
         }
+    }
+
+    /// Rounds to the nearest 1/32768, what a 16-bit part file holds.
+    static func on16Bits(_ x: [Float]) -> [Float] {
+        x.map { Float(max(-32768, min(32767, ($0 * 32768).rounded()))) / 32768 }
     }
 
     func rms(_ x: ArraySlice<Float>) -> Float {
@@ -33,6 +39,33 @@ final class EngineTests: XCTestCase {
         }
         XCTAssertLessThan(maxErr, 1e-5)
         XCTAssertEqual(e.status.position, 256 + 4096)
+    }
+
+    /// T39 (AD-11): each part's level is what it adds to the mix; a part at gain 0 reports 0, a full-scale sine
+    /// at gain 1 about 0.707, and everything reads 0 once paused.
+    func testLevelsFollowEachPartAndTheMaster() {
+        let e = PlaybackEngine(drivesOutput: false)
+        let n = Int(4 * sr)
+        let sine = (0..<n).map { Float(sin(2 * .pi * 440 * Double($0) / sr)) }
+        let silent = [Float](repeating: 0, count: n)
+        e.load(stems: [StereoAudio(left: sine, right: sine, sampleRate: sr), StereoAudio(left: sine, right: sine, sampleRate: sr),
+                       StereoAudio(left: silent, right: silent, sampleRate: sr)], pitchLocked: [false, false, false])
+        e.setGain(stem: 1, 0)
+        e.play()
+        _ = e.renderForTesting(frames: 4096)          // past the fade-in and the gain ramp
+        _ = e.renderForTesting(frames: 4096)
+        var parts = [Float](repeating: -1, count: 4)
+        let master = e.levels(into: &parts)
+        XCTAssertEqual(parts[0], 0.707, accuracy: 0.01, "a full-scale sine at gain 1")
+        XCTAssertEqual(parts[1], 0, accuracy: 1e-4, "gain 0 reports 0")
+        XCTAssertEqual(parts[2], 0, accuracy: 1e-4, "a silent part")
+        XCTAssertEqual(parts[3], 0, "past the last part")
+        XCTAssertGreaterThan(master, 0.5, "the master carries the sine (softly clipped)")
+        e.pause()
+        _ = e.renderForTesting(frames: 4096)
+        _ = e.renderForTesting(frames: 512)
+        XCTAssertEqual(e.levels(into: &parts), 0, "paused: silent")
+        XCTAssertEqual(parts[0], 0)
     }
 
     /// Before the first Play nothing renders, so a seek must still show at once (it used to snap back to 0).
@@ -429,5 +462,153 @@ extension EngineTests {
         e.export(.init(gains: [1], rate: 1, semitones: 0)) { l, _, n in got.append(contentsOf: UnsafeBufferPointer(start: l, count: n)); return true }
         XCTAssertEqual(got.count, stems[0].frameCount)
         XCTAssertEqual(got[1000], stems[0].left[1000], accuracy: 1e-6)   // only stem 0 audible
+    }
+}
+
+/// T08: while a finger scrubs, the engine holds: silent after one fade-out, and seeks only move the position
+/// (re-priming every stretcher per drag event used to overrun the audio thread at speeds other than 100 %).
+extension EngineTests {
+    private func renderBlocks(_ e: PlaybackEngine, _ count: Int) -> [Float] {
+        var out: [Float] = []
+        for _ in 0..<count { out += e.renderForTesting(frames: 1024).left }
+        return out
+    }
+
+    /// One 440 Hz stem whose level steps up every second (0.04 x (second + 1)), so a level says where we are.
+    private func staircase(seconds: Int = 10) -> StereoAudio {
+        let n = seconds * Int(sr)
+        let x = (0..<n).map { i -> Float in
+            let step = Float(i / Int(sr) + 1) * 0.04
+            return step * Float(sin(2 * .pi * 440 * Double(i) / sr))
+        }
+        let q = Self.on16Bits(x)
+        return StereoAudio(left: q, right: q, sampleRate: sr)
+    }
+
+    func testAScrubHoldIsSilentAfterOneFadeOut() {
+        let e = PlaybackEngine(drivesOutput: false)
+        e.load(stems: makeStems(seconds: 10), pitchLocked: [false, false, false])
+        e.play()
+        _ = renderBlocks(e, 8)
+        e.setHold(true)
+        let held = renderBlocks(e, 4)
+        XCTAssertGreaterThan(held[0..<256].map(abs).max() ?? 0, 0, "the fade-out tail")
+        XCTAssertEqual(held[256...].map(abs).max() ?? 1, 0, "silent for the rest of the hold")
+    }
+
+    func testReleasingAHoldPlaysOnFromTheLastSeek() {
+        for rate in [1.0, 0.8] {
+            let e = PlaybackEngine(drivesOutput: false)
+            let stem = staircase()
+            e.load(stems: [stem], pitchLocked: [false])
+            e.setRate(rate)
+            e.seek(frame: Int64(1 * sr))
+            e.play()
+            _ = renderBlocks(e, 43)
+            e.setHold(true)
+            _ = renderBlocks(e, 1)
+
+            var last = 0
+            for i in 0..<10 {
+                last = Int((1.25 + Double(i) / 3) * sr)        // ends at 4.25 s, inside the 0.20 step
+                e.seek(frame: Int64(last))
+                _ = renderBlocks(e, 1)
+                XCTAssertEqual(e.status.position, Int64(last), "rate \(rate): the position during a hold is the last seek")
+            }
+
+            e.setHold(false)
+            var block: [Float] = []
+            for _ in 0..<4 {
+                block = renderBlocks(e, 1)
+                if (block.map(abs).max() ?? 0) > 0 { break }
+            }
+            XCTAssertGreaterThan(block.map(abs).max() ?? 0, 0, "rate \(rate): sound comes back on release")
+            if rate == 1 {
+                var worst: Float = 0
+                for i in 256..<1024 { worst = max(worst, abs(block[i] - stem.left[last + i])) }
+                XCTAssertLessThan(worst, 1e-5, "at 100 % the output is the source from the last seek, sample for sample")
+            } else {
+                let level = rms(block[256..<1024])
+                XCTAssertEqual(level, 0.20 / sqrt(2), accuracy: 0.012, "rate \(rate): the level of the 4-5 s step")
+            }
+            let expected = Double(last) + 1024 * rate
+            XCTAssertEqual(Double(e.status.position), expected, accuracy: 2048, "rate \(rate): playing on from the last seek")
+        }
+    }
+}
+
+/// T08 review (GPT-6 via codex): transitions the first tests missed.
+extension EngineTests {
+    /// A hold and a seek in the same audio block: the fade-out is of the old audio, the seek is cheap, and the
+    /// release plays from exactly the seek target.
+    func testAHoldAndASeekInTheSameBlock() {
+        let e = PlaybackEngine(drivesOutput: false)
+        let stem = staircase()
+        e.load(stems: [stem], pitchLocked: [false])
+        e.seek(frame: Int64(2 * sr))
+        e.play()
+        _ = renderBlocks(e, 10)                                   // around 2.2 s: the 0.12 step
+        let target = Int(4.25 * sr)                               // the 0.20 step
+        e.setHold(true)
+        e.seek(frame: Int64(target))
+        let first = renderBlocks(e, 1)
+        XCTAssertLessThanOrEqual(first[0..<256].map(abs).max() ?? 1, 0.121, "the fade-out is of the old audio")
+        XCTAssertEqual(first[256...].map(abs).max() ?? 1, 0)
+        XCTAssertEqual(e.status.position, Int64(target))
+        e.setHold(false)
+        let back = renderBlocks(e, 1)
+        var worst: Float = 0
+        for i in 256..<1024 { worst = max(worst, abs(back[i] - stem.left[target + i])) }
+        XCTAssertLessThan(worst, 1e-5, "it plays on from exactly the seek target")
+    }
+
+    func testPlayWithAFingerAlreadyDownStaysSilent() {
+        let e = PlaybackEngine(drivesOutput: false)
+        e.load(stems: makeStems(seconds: 6), pitchLocked: [false, false, false])
+        e.setHold(true)
+        e.play()
+        XCTAssertEqual(renderBlocks(e, 3).map(abs).max() ?? 1, 0)
+    }
+
+    func testTheEndOfACountInDuringAHoldLeaksNoAudio() {
+        let e = PlaybackEngine(drivesOutput: false)
+        e.load(stems: makeStems(seconds: 6), pitchLocked: [false, false, false])
+        e.setCountIn(enabled: true, bpm: 120, beats: 4)            // 2 s of clicks
+        e.setHold(true)
+        e.play()
+        let out = renderBlocks(e, 108)                              // 2.5 s
+        XCTAssertGreaterThan(out[0..<88_200].map(abs).max() ?? 0, 0, "the count-in still clicks")
+        XCTAssertEqual(out[88_200...].map(abs).max() ?? 1, 0, "and no song audio slips out when it ends")
+    }
+
+    func testLoadingASongEndsAHold() {
+        let e = PlaybackEngine(drivesOutput: false)
+        e.load(stems: makeStems(seconds: 6), pitchLocked: [false, false, false])
+        e.play()
+        _ = renderBlocks(e, 4)
+        e.setHold(true)
+        _ = renderBlocks(e, 2)
+        e.setHold(false)
+        e.load(stems: makeStems(seconds: 6), pitchLocked: [false, false, false])
+        e.play()
+        XCTAssertGreaterThan(renderBlocks(e, 3).map(abs).max() ?? 0, 0.1)
+    }
+}
+
+extension EngineTests {
+    /// The fade-out at the start of a hold reads ahead; a loop wrap inside it is not a pass the player heard
+    /// (it would advance the counter and the speed trainer early).
+    func testAHoldAtTheLoopEndCountsNoPass() {
+        let e = PlaybackEngine(drivesOutput: false)
+        e.load(stems: makeStems(seconds: 8), pitchLocked: [false, false, false])
+        let a = Int64(2 * sr), b = Int64(4 * sr)
+        e.setLoop(enabled: true, start: a, end: b)
+        e.seek(frame: b - 1100)
+        e.play()
+        _ = renderBlocks(e, 1)                                    // 76 frames before the loop end
+        XCTAssertEqual(e.status.loopPasses, 0)
+        e.setHold(true)
+        _ = renderBlocks(e, 2)
+        XCTAssertEqual(e.status.loopPasses, 0, "the fade-out crossed the loop end, but nobody heard a pass")
     }
 }

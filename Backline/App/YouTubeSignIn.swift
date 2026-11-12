@@ -5,9 +5,10 @@ import WebKit
 
 /// "Sign in to YouTube" for videos YouTube won't give out anonymously ("confirm you're not a bot",
 /// age-restricted, members-only). The user signs in on Google's own page inside Backline; the session
-/// lives in a private web data store that only Backline uses, separate from their everyday browser.
-/// For each download the YouTube/Google cookies are written to a temporary cookies.txt for yt-dlp and
-/// deleted straight after. See docs/self-contained-install-plan.md §B.
+/// lives in a private web data store that only Backline uses, separate from their everyday browser. Each
+/// download reads the YouTube / Google cookies from that store, uses them for that one request chain, and
+/// forgets them (iOS `YouTubeSignIn`). Cookie values are never logged or copied anywhere else.
+/// See docs/self-contained-install-plan.md §B.
 @MainActor
 enum YouTubeSignIn {
     /// Kill switch: hides every sign-in entry point; downloads stay anonymous.
@@ -20,7 +21,7 @@ enum YouTubeSignIn {
         #endif
         return UUID(uuidString: "6B1C7E5A-3F0D-4E8B-9A51-2D7C0F4B8E61")!
     }()
-    /// One instance for the app's lifetime (the web view and the cookie export must share it).
+    /// One instance for the app's lifetime (the web view and the cookie reads must share it).
     private static var _store: WKWebsiteDataStore?
     static var store: WKWebsiteDataStore {
         if let s = _store { return s }
@@ -29,9 +30,14 @@ enum YouTubeSignIn {
         return s
     }
 
-    /// Only these sites (and their subdomains) may load in the sign-in window. Exact suffix match on a
-    /// dot boundary — "accounts.google.evil.com" or "evilgoogle.com" never match.
-    static let allowedHosts = ["google.com", "youtube.com", "gstatic.com", "googleusercontent.com", "googleapis.com"]
+    /// Only these sites (and their subdomains) may load in the sign-in window.
+    nonisolated static let allowedHosts = ["google.com", "youtube.com", "gstatic.com", "googleusercontent.com", "googleapis.com"]
+
+    /// Exact suffix match on a dot boundary: "accounts.google.evil.com" or "evilgoogle.com" never match.
+    nonisolated static func isAllowed(host: String) -> Bool {
+        let h = host.lowercased()
+        return allowedHosts.contains { h == $0 || h.hasSuffix("." + $0) }
+    }
 
     static let signInURL = URL(string: "https://accounts.google.com/ServiceLogin?service=youtube&hl=en&continue=https%3A%2F%2Fwww.youtube.com%2F")!
 
@@ -41,58 +47,20 @@ enum YouTubeSignIn {
         set { UserDefaults.standard.set(newValue, forKey: "youtubeSignedIn") }
     }
 
-    static func cookies() async -> [NetscapeCookies.Cookie] {
-        let all = await store.httpCookieStore.allCookies()
-        return all.filter { NetscapeCookies.isYouTubeAuthDomain($0.domain) }.map {
-            NetscapeCookies.Cookie(domain: $0.domain, path: $0.path, secure: $0.isSecure, httpOnly: $0.isHTTPOnly,
-                                   expires: $0.expiresDate, name: $0.name, value: $0.value)
-        }
+    /// The YouTube / Google cookies of the signed-in session (nothing else is ever returned).
+    static func cookies() async -> [HTTPCookie] {
+        await store.httpCookieStore.allCookies().filter { NetscapeCookies.isYouTubeAuthDomain($0.domain) }
+    }
+
+    nonisolated static func hasLogin(_ cookies: [HTTPCookie]) -> Bool {
+        YouTubeCookies(cookies).isSignedIn
     }
 
     static func refreshStatus() async {
-        isSignedIn = NetscapeCookies.hasYouTubeLogin(await cookies())
+        isSignedIn = hasLogin(await cookies())
     }
 
-    /// Writes a private, temporary cookies.txt for one yt-dlp run. nil when not signed in.
-    static func writeCookieFile() async -> URL? {
-        guard isEnabled else { return nil }
-        let list = await cookies()
-        guard NetscapeCookies.hasYouTubeLogin(list) else { isSignedIn = false; return nil }
-        let url = cookieDirectory.appendingPathComponent("yt-\(UUID().uuidString).txt")
-        try? FileManager.default.createDirectory(at: cookieDirectory, withIntermediateDirectories: true,
-                                                 attributes: [.posixPermissions: 0o700])
-        // Created 0600 before any secret is written into it.
-        guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]),
-              let h = try? FileHandle(forWritingTo: url) else { return nil }
-        h.write(Data(NetscapeCookies.serialize(list).utf8))
-        try? h.close()
-        return url
-    }
-
-    /// After yt-dlp ran: YouTube may have rotated cookies (yt-dlp writes them back to the jar). Copy any
-    /// changed values into our store so the next download uses the fresh session, then delete the file.
-    static func finish(cookieFile url: URL) async {
-        defer { try? FileManager.default.removeItem(at: url) }
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
-        let updated = NetscapeCookies.parse(text).filter { NetscapeCookies.isYouTubeAuthDomain($0.domain) }
-        guard !updated.isEmpty else { return }
-        let current = await store.httpCookieStore.allCookies().filter { NetscapeCookies.isYouTubeAuthDomain($0.domain) }
-        let key: (String, String, String) -> String = { "\($0)|\($1)|\($2)" }
-        let known = Dictionary(current.map { (key($0.domain, $0.path, $0.name), $0.value) }, uniquingKeysWith: { a, _ in a })
-        let kept = Set(updated.map { key($0.domain, $0.path, $0.name) })
-        // Cookies yt-dlp dropped (expired or cleared by YouTube) are removed from our store too.
-        for c in current where !kept.contains(key(c.domain, c.path, c.name)) {
-            await store.httpCookieStore.deleteCookie(c)
-        }
-        for c in updated where known[key(c.domain, c.path, c.name)] != c.value {
-            var props: [HTTPCookiePropertyKey: Any] = [.domain: c.domain, .path: c.path, .name: c.name, .value: c.value]
-            if c.secure { props[.secure] = "TRUE" }
-            if let e = c.expires { props[.expires] = e }
-            if c.httpOnly { props[HTTPCookiePropertyKey("HttpOnly")] = "TRUE" }
-            if let cookie = HTTPCookie(properties: props) { await store.httpCookieStore.setCookie(cookie) }
-        }
-    }
-
+    /// The temporary cookies.txt files the 1.0 engine (yt-dlp) wrote for each download.
     static var cookieDirectory: URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("yt-cookies", isDirectory: true)
     }
@@ -140,7 +108,7 @@ struct YouTubeSignInSheet: View {
                 Image(systemName: "person.crop.circle.badge.checkmark")
                     .font(.system(size: 26)).foregroundStyle(Theme.primaryTint)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Sign in to YouTube").font(Typo.ui(17, .bold)).foregroundStyle(Theme.ink)
+                    Text("Sign in").font(Typo.ui(17, .bold)).foregroundStyle(Theme.ink)
                     Text(headline).font(Typo.ui(13)).foregroundStyle(Theme.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -220,7 +188,7 @@ struct YouTubeSignInSheet: View {
             }
             Text("Click the button below. Then pick **Enter your password**.")
                 .font(Typo.ui(13)).foregroundStyle(Theme.ink2)
-            Text("You can also pick **Tap Yes on your phone** if your phone has the YouTube or Gmail app.")
+            Text("You can also pick **Tap Yes on your phone** if your phone has a Google app.")
                 .font(Typo.ui(12)).foregroundStyle(Theme.muted)
             HStack(spacing: 8) {
                 Button("Show other ways") { tryAnotherWay += 1 }.buttonStyle(PrimaryButtonStyle())
@@ -240,7 +208,7 @@ struct YouTubeSignInSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(passkeyAsked ? "No password? That's OK." : "Google said no to signing in here").font(Typo.ui(18, .bold)).foregroundStyle(Theme.ink)
             Text("You can still get the song. You don't need to sign in:").font(Typo.ui(14)).foregroundStyle(Theme.ink2)
-            Label("Play the video in your web browser. Then use **Record from an app**. Backline records the song while it plays.",
+            Label("Play the video in your web browser. Then use **Record a song**. Backline records the song while it plays.",
                   systemImage: "record.circle")
             Label("Or ask a grown-up to help you sign in.", systemImage: "person.2")
             Button("Close") { dismiss() }.buttonStyle(PrimaryButtonStyle())
@@ -300,7 +268,11 @@ struct SignInWebView: NSViewRepresentable {
         // WKWebView is Safari's engine; identify as Safari so Google shows its normal page.
         web.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
         web.navigationDelegate = context.coordinator
+        #if !BACKLINE_APP_STORE
+        // Not public API on WKWebView (set by key), so left out of the store build (guideline 2.5.1); the page
+        // is opaque, and the colour below covers the edges either way.
         web.setValue(false, forKey: "drawsBackground")
+        #endif
         web.underPageBackgroundColor = NSColor(Theme.bg)
         context.coordinator.web = web
         #if DEBUG
@@ -349,7 +321,7 @@ struct SignInWebView: NSViewRepresentable {
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(1))
                     guard let self, self.parent.state != .done else { return }
-                    if NetscapeCookies.hasYouTubeLogin(await YouTubeSignIn.cookies()) {
+                    if YouTubeSignIn.hasLogin(await YouTubeSignIn.cookies()) {
                         YouTubeSignIn.isSignedIn = true
                         self.parent.state = .done
                         return
@@ -361,7 +333,7 @@ struct SignInWebView: NSViewRepresentable {
         nonisolated func cookiesDidChange(in cookieStore: WKHTTPCookieStore) {
             Task { @MainActor in
                 guard self.parent.state != .done else { return }
-                if NetscapeCookies.hasYouTubeLogin(await YouTubeSignIn.cookies()) {
+                if YouTubeSignIn.hasLogin(await YouTubeSignIn.cookies()) {
                     YouTubeSignIn.isSignedIn = true
                     self.parent.state = .done
                 }
@@ -395,15 +367,13 @@ struct SignInWebView: NSViewRepresentable {
         /// Only Google and YouTube pages load in this window; anything else opens in the user's browser.
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
             guard let host = action.request.url?.host?.lowercased() else { return .allow }
-            let ok = YouTubeSignIn.allowedHosts.contains { host == $0 || host.hasSuffix("." + $0) }
-            if ok { return .allow }
+            if YouTubeSignIn.isAllowed(host: host) { return .allow }
             if action.navigationType == .linkActivated, let url = action.request.url { NSWorkspace.shared.open(url) }
             return .cancel
         }
 
         private func check(_ webView: WKWebView) async {
-            let cookies = await YouTubeSignIn.cookies()
-            if NetscapeCookies.hasYouTubeLogin(cookies) {
+            if YouTubeSignIn.hasLogin(await YouTubeSignIn.cookies()) {
                 YouTubeSignIn.isSignedIn = true
                 parent.state = .done
                 return
@@ -418,7 +388,7 @@ struct SignInWebView: NSViewRepresentable {
             let started = Date()
             try? await Task.sleep(for: .seconds(6))
             if parent.state == .working || parent.state == .loading, Date().timeIntervalSince(started) >= 6 {
-                if NetscapeCookies.hasYouTubeLogin(await YouTubeSignIn.cookies()) { YouTubeSignIn.isSignedIn = true; parent.state = .done }
+                if YouTubeSignIn.hasLogin(await YouTubeSignIn.cookies()) { YouTubeSignIn.isSignedIn = true; parent.state = .done }
                 else { parent.state = .ready }
             }
             // Google's "This browser or app may not be secure" / disallowed_useragent page.

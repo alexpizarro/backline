@@ -1,0 +1,4 @@
+// Release and App Store builds: the song service's prod environment, when this Mac has its key
+// (scripts/song-service-config.sh writes the git-ignored file below from ~/.config/audiointel/prod.env). Without it
+// the service is off, as in every build made elsewhere.
+#include? "SongService.prod.local.xcconfig"

@@ -1,7 +1,7 @@
 import BacklineKit
 import SwiftUI
 
-/// First launch only: "What do you practise?", then three simple cards for that choice, then straight
+/// First launch only: "What do you play?", then three simple cards for that choice, then straight
 /// into the app. Help ▸ Show Welcome Again brings it back. The choice can be changed anytime at the top.
 struct WelcomeSheet: View {
     @Environment(AppModel.self) private var model
@@ -10,7 +10,7 @@ struct WelcomeSheet: View {
     @State private var page = 0
 
     private static let addSong = (symbol: "music.note", title: "Add a song",
-                                  text: "Drag a music file onto Backline. Or paste a YouTube link. Backline splits the song into parts.")
+                                  text: "Drag a music file onto Backline. Or paste a song or video link. Backline splits the song into parts.")
 
     private var cards: [(symbol: String, title: String, text: String)] {
         switch model.appMode {
@@ -65,17 +65,16 @@ struct WelcomeSheet: View {
         .padding(30)
         .frame(width: 520)
         .background(Theme.card)
-        .preferredColorScheme(.dark)
         .animation(.smooth, value: page)
     }
 
     private var chooser: some View {
         VStack(spacing: 18) {
-            Text("What do you practise?").font(Typo.ui(24, .bold)).foregroundStyle(Theme.ink)
+            Text("What do you play?").font(Typo.ui(24, .bold)).foregroundStyle(Theme.ink)
             HStack(spacing: 12) {
-                choice(.play, "I play an instrument")
-                choice(.dance, "I dance bachata or salsa")
-                choice(.beats, "I rap or sing")
+                choice(.play, "An instrument")
+                choice(.dance, "Bachata or salsa")
+                choice(.beats, "Rap or sing")
             }
             Text("You can change this anytime at the top of the window.")
                 .font(Typo.ui(13)).foregroundStyle(Theme.muted)

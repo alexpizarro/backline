@@ -1,0 +1,44 @@
+name: Bug report
+description: Something in Backline doesn't work as it should.
+labels: [bug]
+body:
+  - type: input
+    id: mac
+    attributes:
+      label: Mac and macOS version
+      placeholder: MacBook Air M2, 16 GB, macOS 26.1
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Backline version
+      description: Backline > About Backline.
+      placeholder: "0.17"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to make it happen again
+      placeholder: |
+        1. Drop a song on the window
+        2. Switch to Dance
+        3. ...
+  - type: textarea
+    id: song
+    attributes:
+      label: The song or link, if it matters
+      description: The kind of song (genre, length) or the link. Please don't attach music you can't share.
+  - type: textarea
+    id: crash
+    attributes:
+      label: Crash report
+      description: If Backline quit by itself, attach the report from Console > Crash Reports (files starting with "Backline").

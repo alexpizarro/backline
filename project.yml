@@ -11,8 +11,9 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.17"
-    CURRENT_PROJECT_VERSION: "17"
+    MARKETING_VERSION: "1.1"
+    # Set to `git rev-list --count HEAD` by scripts/set-build-number.sh after the last commit (as iOS R04).
+    CURRENT_PROJECT_VERSION: "168"
     DEVELOPMENT_TEAM: SBMJ9PMG22
     CODE_SIGN_STYLE: Automatic
     CODE_SIGN_IDENTITY: "Apple Development"
@@ -24,6 +25,7 @@ settings:
     ARCHS: arm64
     EXCLUDED_ARCHS: x86_64
     ONLY_ACTIVE_ARCH: YES
+    BACKLINE_ID_SUFFIX: ""
   configs:
     Debug:
       # Team-signed so the sandboxed yt-dlp helper can inherit Backline's sandbox (inheritance requires
@@ -32,6 +34,10 @@ settings:
       CODE_SIGN_STYLE: Automatic
       CODE_SIGN_IDENTITY: "Apple Development"
       DEVELOPMENT_TEAM: SBMJ9PMG22
+      # A Debug build has its own bundle id, so its sandbox container is never the installed app's: a debug
+      # run, the snapshot harness and the unit tests' host app can't open or change a real library.
+      # Builders working side by side pass BACKLINE_ID_SUFFIX=.dev-<name> to xcodebuild for a container each.
+      BACKLINE_ID_SUFFIX: ".dev"
     Release:
       SWIFT_OPTIMIZATION_LEVEL: -O
       GCC_OPTIMIZATION_LEVEL: 3
@@ -39,6 +45,10 @@ targets:
   Backline:
     type: application
     platform: macOS
+    # The song service's address and key, from git-ignored files (scripts/song-service-config.sh); empty without them.
+    configFiles:
+      Debug: Config/Debug.xcconfig
+      Release: Config/Release.xcconfig
     sources:
       - path: Backline
         excludes:
@@ -47,11 +57,13 @@ targets:
         buildPhase: resources
       - path: Backline/Resources/Fonts/OFL-JetBrainsMono.txt
         buildPhase: resources
+      - path: Backline/Resources/Fonts/LICENSE-PermanentMarker.txt
+        buildPhase: resources
     dependencies:
       - package: BacklineKit
         product: BacklineKit
     postCompileScripts:
-      - name: Embed yt-dlp (YouTube link import)
+      - name: Embed yt-dlp (only with BACKLINE_YTDLP=1)
         basedOnDependencyAnalysis: false
         script: "\"${SRCROOT}/scripts/embed-ytdlp.sh\""
       - name: Embed LAME (LGPL, dynamically loaded)
@@ -73,13 +85,18 @@ targets:
         CFBundleDisplayName: Backline
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        BLSongServiceBaseURL: "$(BL_SONG_SERVICE_URL)"
+        BLSongServiceKey: "$(BL_SONG_SERVICE_KEY)"
         CFBundleName: Backline
         LSApplicationCategoryType: public.app-category.music
         NSHumanReadableCopyright: "© 2026 Backline. Demucs © Meta. Signalsmith Stretch © Signalsmith Audio (MIT)."
         ATSApplicationFontsPath: "."
         LSMinimumSystemVersion: "15.0"
+        # Standard HTTPS only (exempt), as on iOS: App Store Connect then asks no export-compliance question.
+        ITSAppUsesNonExemptEncryption: false
         NSMainNibFile: ""
         NSAudioCaptureUsageDescription: "Backline records a song from another app so it can split it into parts. Recordings stay on your Mac."
+        NSMicrophoneUsageDescription: "Backline records a band, a speaker or a rehearsal so it can split the song into parts. It only listens while the Record window is open. Recordings stay on your Mac."
         CFBundleDocumentTypes:
           - CFBundleTypeName: Audio
             CFBundleTypeRole: Viewer
@@ -91,6 +108,7 @@ targets:
               - public.aiff-audio
               - public.mpeg-4-audio
               - org.xiph.flac
+              - public.movie
     entitlements:
       path: Backline/Backline.entitlements
       properties:
@@ -99,9 +117,20 @@ targets:
         com.apple.security.assets.music.read-write: true
         com.apple.security.device.audio-input: true
         com.apple.security.network.client: true
+        # Try again on an unfinished import of the person's own file, after Backline closed while splitting it:
+        # the journal keeps a security-scoped bookmark to the file (AppModel+Recovery.swift), opened in a later run.
+        com.apple.security.files.bookmarks.app-scope: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.alexpizarro.backline
+        PRODUCT_BUNDLE_IDENTIFIER: "com.alexpizarro.backline$(BACKLINE_ID_SUFFIX)"
+        # Links use the Swift engine shared with iOS (decision D10). For one release, a build made with
+        # BACKLINE_YTDLP=1 (on the xcodebuild command line or in the environment) brings yt-dlp back: the embed
+        # step above unpacks it, and this condition compiles the 1.0 engine (Backline/App/YTDLPImport.swift).
+        BACKLINE_YTDLP_CONDITION_1: BACKLINE_YTDLP
+        # The Mac App Store build (scripts/appstore.sh passes BACKLINE_APP_STORE=1): leaves out the one private
+        # system function the Record window uses to name a web page's audio (guideline 2.5.1, public APIs only).
+        BACKLINE_APP_STORE_CONDITION_1: BACKLINE_APP_STORE
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) $(BACKLINE_YTDLP_CONDITION_$(BACKLINE_YTDLP)) $(BACKLINE_APP_STORE_CONDITION_$(BACKLINE_APP_STORE))"
         PRODUCT_NAME: Backline
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
@@ -112,3 +141,36 @@ targets:
         COREML_CODEGEN_LANGUAGE: None
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
         ENABLE_USER_SCRIPT_SANDBOXING: NO
+  BacklineTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: BacklineTests
+        excludes:
+          - "Fixtures/**"
+      # The tiny test models (the harness serves the same files for --models-tiny).
+      - path: BacklineTests/Fixtures/models
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - target: Backline
+      - package: BacklineKit
+        product: BacklineKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.alexpizarro.backline.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+schemes:
+  Backline:
+    build:
+      targets:
+        Backline: all
+        BacklineTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - BacklineTests
+

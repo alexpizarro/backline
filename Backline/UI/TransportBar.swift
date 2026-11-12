@@ -39,7 +39,7 @@ struct TransportBar: View {
             PlayButton(isPlaying: model.isPlaying, countInBeat: model.countInLabel) { model.togglePlay() }
 
             HStack(spacing: 0) {
-                Text(formatTime(model.position)).foregroundStyle(Theme.ink)
+                Text(model.timeText.elapsed).foregroundStyle(Theme.ink)
                 if !compact { Text(" / \(formatTime(model.duration))").foregroundStyle(Theme.muted) }
             }
             .font(Typo.mono(13))
@@ -56,7 +56,7 @@ struct TransportBar: View {
                 Stepper3(value: "\(model.settings.trainer.enabled && model.settings.loopEnabled ? model.liveSpeed : model.settings.speed)%",
                          highlighted: model.settings.speed != 100 || (model.settings.trainer.enabled && model.settings.loopEnabled),
                          down: { model.stepSpeed(-1) }, up: { model.stepSpeed(1) },
-                         reset: { model.settings.trainer.enabled = false; model.settings.speed = 100 },
+                         reset: { model.resetSpeed() },
                          canDown: model.settings.speed > 50, canUp: model.settings.speed < 150)
                     .help("Slow down or speed up without changing pitch · ⌘← ⌘→")
                 if mode != .beats {
@@ -139,8 +139,8 @@ struct PlayButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
-        .animation(.spring(duration: 0.25), value: countInBeat)
-        .animation(.easeOut(duration: 0.15), value: hover)
+        .motion(.spring(duration: 0.25), value: countInBeat)
+        .motion(.easeOut(duration: 0.15), value: hover)
         .help(isPlaying ? "Pause · Space" : "Play · Space")
         .accessibilityLabel(isPlaying ? "Pause" : "Play")
     }
@@ -168,12 +168,41 @@ struct LoopChip: View {
             .buttonStyle(.plain)
             .fixedSize()
             .help("Loop this eight · L. Click and hold to loop 16 or 32 counts.")
+        } else if model.mode == .play {
+            // Play: a click loops the section under the playhead (or stops the loop); hold for the Loop menu (3.4).
+            Menu {
+                Button { model.toggleSectionLoop() } label: { Label("This section", systemImage: "rectangle.split.3x1") }
+                Button { model.markLoopA() } label: { Label("Set A", systemImage: "a.circle") }
+                if model.loopCaptureA != nil {
+                    Button { model.abPress() } label: { Label("Set B", systemImage: "b.circle") }
+                }
+                if on {
+                    Button { model.seek(to: model.loopRange?.lowerBound ?? 0) } label: {
+                        Label("To loop start", systemImage: "arrow.counterclockwise")
+                    }
+                    Divider()
+                    Button { model.updateSettings { $0.loopEnabled = false } } label: { Label("Stop loop", systemImage: "stop") }
+                }
+            } label: {
+                chip(on: on)
+            } primaryAction: {
+                model.toggleDefaultLoop()
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .onHover { hover = $0 }
+            .help("Loop this section · L. Click and hold for more: set A and B, go to the loop's start.")
+            .accessibilityLabel("Loop")
+            .accessibilityValue(on ? rangeText : "Off")
+            .motion(.easeOut(duration: 0.15), value: on)
         } else {
             Button { model.toggleLoop() } label: { chip(on: on) }
                 .buttonStyle(.plain)
                 .onHover { hover = $0 }
                 .help("Loop a part · L. Click a part above, or hold Option and drag on the wave.")
-                .animation(.easeOut(duration: 0.15), value: on)
+                .motion(.easeOut(duration: 0.15), value: on)
         }
     }
 
@@ -239,7 +268,7 @@ struct Stepper3: View {
         .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Theme.card))
         .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Theme.hairline2))
         .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .animation(.snappy(duration: 0.2), value: value)
+        .motion(.snappy(duration: 0.2), value: value)
     }
 }
 
@@ -291,7 +320,7 @@ struct CountInCheckbox: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .animation(.spring(duration: 0.2), value: isOn)
+        .motion(.spring(duration: 0.2), value: isOn)
         .help(dance ? "Counts 5, 6, 7, 8 before the music starts · K" : "Four clicks before the music starts · K")
         .accessibilityLabel("Count-in")
         .accessibilityValue(isOn ? "On" : "Off")
@@ -323,10 +352,7 @@ struct TrainerPopover: View {
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 14) {
-            Toggle(isOn: Binding(get: { model.settings.trainer.enabled }, set: { on in
-                model.settings.trainer.enabled = on
-                if on && !model.settings.loopEnabled { model.toggleLoop() }
-            })) {
+            Toggle(isOn: Binding(get: { model.settings.trainer.enabled }, set: { model.setTrainer($0) })) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Speed trainer").font(Typo.ui(14, .bold)).foregroundStyle(Theme.ink)
                     Text("Starts slow, speeds up as the loop repeats.").font(Typo.ui(12)).foregroundStyle(Theme.muted)
@@ -409,7 +435,7 @@ struct ABButton: View {
         .onHover { hover = $0 }
         .help(help(state))
         .accessibilityLabel(help(state))
-        .animation(.easeOut(duration: 0.15), value: state == .setB)
+        .motion(.easeOut(duration: 0.15), value: state == .setB)
     }
 
     func help(_ s: AppModel.ABState) -> String {

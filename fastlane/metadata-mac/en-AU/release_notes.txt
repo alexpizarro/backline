@@ -1,0 +1,7 @@
+• New songs are ready to play sooner, and songs take less space.
+• Song links, including links from music services.
+• The drum kit and cleaner parts are offered right in the player.
+• Record from a microphone or audio interface.
+• Zoom the song map and draw a loop on it.
+• If Backline closes while splitting, it carries on where it stopped.
+• Help written for the Mac, and Reset Backline in Settings.

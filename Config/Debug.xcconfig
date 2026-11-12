@@ -1,0 +1,3 @@
+// Debug builds: the song service's test environment, when this Mac has its key (scripts/song-service-config.sh writes
+// the git-ignored file below from ~/.config/audiointel/test.env). Without it the service is off.
+#include? "SongService.test.local.xcconfig"

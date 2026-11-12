@@ -173,17 +173,54 @@ public final class DrumSeparator: @unchecked Sendable {
     private var step: Int { Self.chunk / overlap }
     private var border: Int { Self.chunk - Self.chunk / overlap }
 
-    private let model: MLModel
+    /// A chunk whose drums average below this mean square (-70 dBFS, both channels) is not sent to the model:
+    /// its parts are zero there and the chunk's weight still counts, so `rest` takes whatever is left and the
+    /// pieces still add up to the drums exactly (split F10). Drumless intros, breaks and outros are skipped.
+    /// The quietest chunk of drums in the fixtures sits far above it (see DrumSeparatorTests).
+    public static let silentMeanSquare: Float = 1e-7
+    /// Weights at or below this count as none when the parts are divided by them.
+    static let weightFloor: Float = 1e-6
+    let skipBelow: Float
+
+    private let model: MLModel?
+    /// Runs the model on one `spec` tensor and returns its `freq` tensor.
+    private let predict: (MLMultiArray, () -> Bool) throws -> MLMultiArray
     private let stft = MDXSTFT(nfft: nfft, hop: hop, bins: dimF, frames: frames)
 
-    public init(modelURL: URL, computeUnits: MLComputeUnits = .cpuAndGPU,
+    public init(modelURL: URL, computeUnits: MLComputeUnits = .cpuOnly,
                 overlap: Int = DrumSeparator.numOverlap) throws {
         precondition(overlap >= 2, "overlap must be >= 2")
         self.overlap = overlap
+        // The GPU is left alone on purpose. Measured on an iPhone 15 Pro (20 s of a real song, both
+        // backends on the identical chunk): .cpuAndGPU returns stems that correlate only 0.85-0.92 with
+        // a Mac reference and whose sum is -14.5 dB from the mix, while .cpuOnly scores 0.94-0.9997 and
+        // -35.2 dB. The FP16 mlprogram graph is not numerically sound on the device GPU. CPU is also
+        // slightly faster there (37 s vs 43 s), so nothing is given up. Checked by --diag-roformer.
         let config = MLModelConfiguration()
         config.computeUnits = computeUnits
         config.allowLowPrecisionAccumulationOnGPU = false
-        self.model = try MLModel(contentsOf: modelURL, configuration: config)
+        let model = try MLModel(contentsOf: modelURL, configuration: config)
+        self.model = model
+        self.skipBelow = Self.silentMeanSquare
+        self.predict = { spec, isCancelled in
+            let result = try DemucsSeparator.predict(model, MLDictionaryFeatureProvider(dictionary: [
+                "spec": MLFeatureValue(multiArray: spec),
+            ]), isCancelled: isCancelled)
+            guard let freq = result.featureValue(for: "freq")?.multiArrayValue else {
+                throw CocoaError(.coderValueNotFound)
+            }
+            return freq
+        }
+    }
+
+    /// For tests: `predict` stands in for the model; `skipBelow` 0 sends every chunk to it.
+    init(overlap: Int, skipBelow: Float = DrumSeparator.silentMeanSquare,
+         predict: @escaping (MLMultiArray, () -> Bool) throws -> MLMultiArray) {
+        precondition(overlap >= 2, "overlap must be >= 2")
+        self.overlap = overlap
+        self.model = nil
+        self.skipBelow = skipBelow
+        self.predict = predict
     }
 
     /// The bundled compiled model, if the app ever ships one.
@@ -193,7 +230,7 @@ public final class DrumSeparator: @unchecked Sendable {
 
     /// Runs one silent chunk so the Metal kernels are compiled before the first real call.
     public func warmUp() {
-        guard let spec = try? MLMultiArray(shape: [1, 4, NSNumber(value: Self.dimF), NSNumber(value: Self.frames)],
+        guard let model, let spec = try? MLMultiArray(shape: [1, 4, NSNumber(value: Self.dimF), NSNumber(value: Self.frames)],
                                            dataType: .float32),
               let input = try? MLDictionaryFeatureProvider(dictionary: ["spec": MLFeatureValue(multiArray: spec)])
         else { return }
@@ -205,7 +242,11 @@ public final class DrumSeparator: @unchecked Sendable {
     /// Returns one entry per `parts` plus `restKey`, so `sum(result.values) == drums` to
     /// float precision. MDX23C is not mask-constrained, so the five parts alone do not sum
     /// to the input.
+    ///
+    /// With a `checkpoint`, finished audio is kept on disk as it is made, and a run stopped part-way carries on
+    /// where it stopped: it gives the same samples as a run that was never stopped.
     public func separate(_ drums: StereoAudio,
+                         checkpoint: SeparationCheckpoint? = nil,
                          progress: ((Double) -> Void)? = nil,
                          isCancelled: () -> Bool = { false }) throws -> [String: StereoAudio] {
         let n = drums.frameCount
@@ -243,9 +284,46 @@ public final class DrumSeparator: @unchecked Sendable {
         var window = [Float](repeating: 0, count: L)
 
         let offsets = Array(stride(from: 0, to: padLen, by: step))
-        for (ci, i) in offsets.enumerated() {
+        // A run that was stopped kept the final samples below `resumeFrom`: only the chunks that reach past them are
+        // computed again, from nothing, and the kept samples are put back over them at the end.
+        var writer = CheckpointWriter.open(checkpoint, total: padLen, step: step, channels: P * 2,
+                                           scale: .reciprocal(above: Self.weightFloor))
+        let resumeFrom = writer?.resumeFrom ?? 0
+        let first = CheckpointWriter.firstChunk(offsets, resumeFrom: resumeFrom) { min(L, padLen - $0) }
+        // No later chunk reaches below `i + step`: those samples are final and go to the checkpoint.
+        func chunkDone(_ ci: Int, _ i: Int) {
+            if let w = writer, (try? w.append(upTo: min(i + step, padLen), accumulated: acc, weight: counter)) == nil {
+                writer = nil
+            }
+            progress?(Double(ci + 1) / Double(offsets.count))
+        }
+        for ci in first..<offsets.count {
+            let i = offsets[ci]
             if isCancelled() { throw CancellationError() }
             let seg = min(L, padLen - i)
+
+            window.withUnsafeMutableBufferPointer { w in
+                baseWindow.withUnsafeBufferPointer { b in w.baseAddress!.update(from: b.baseAddress!, count: L) }
+                if i == 0 { w.baseAddress!.update(repeating: 1, count: fade) }
+                else if i + step >= padLen { (w.baseAddress! + L - fade).update(repeating: 1, count: fade) }
+            }
+
+            // Silent drums: zeros for every part (nothing added), but the chunk's weight still counts.
+            var power: Float = 0
+            for c in 0..<2 {
+                var ms: Float = 0
+                padded[c].withUnsafeBufferPointer { vDSP_measqv($0.baseAddress! + i, 1, &ms, vDSP_Length(seg)) }
+                power += ms / 2
+            }
+            if power < skipBelow {
+                counter.withUnsafeMutableBufferPointer { cp in
+                    window.withUnsafeBufferPointer { w in
+                        vDSP_vadd(cp.baseAddress! + i, 1, w.baseAddress!, 1, cp.baseAddress! + i, 1, vDSP_Length(seg))
+                    }
+                }
+                chunkDone(ci, i)
+                continue
+            }
 
             // Chunk, right-padded to L: reflect while more than half the chunk is real audio
             // (upstream's rule), zeros otherwise.
@@ -272,12 +350,7 @@ public final class DrumSeparator: @unchecked Sendable {
                 }
             }
 
-            let result = try model.prediction(from: MLDictionaryFeatureProvider(dictionary: [
-                "spec": MLFeatureValue(multiArray: specArr),
-            ]))
-            guard let freq = result.featureValue(for: "freq")?.multiArrayValue else {
-                throw CocoaError(.coderValueNotFound)
-            }
+            let freq = try predict(specArr, isCancelled)
 
             // iSTFT every (part, channel) in parallel.
             Self.withPlanes(freq, planes: P * 4, planeSize: F * T) { f in
@@ -291,12 +364,6 @@ public final class DrumSeparator: @unchecked Sendable {
                         }
                     }
                 }
-            }
-
-            window.withUnsafeMutableBufferPointer { w in
-                baseWindow.withUnsafeBufferPointer { b in w.baseAddress!.update(from: b.baseAddress!, count: L) }
-                if i == 0 { w.baseAddress!.update(repeating: 1, count: fade) }
-                else if i + step >= padLen { (w.baseAddress! + L - fade).update(repeating: 1, count: fade) }
             }
 
             for k in 0..<(P * 2) {
@@ -314,15 +381,22 @@ public final class DrumSeparator: @unchecked Sendable {
                     vDSP_vadd(cp.baseAddress! + i, 1, w.baseAddress!, 1, cp.baseAddress! + i, 1, vDSP_Length(seg))
                 }
             }
-            progress?(Double(ci + 1) / Double(offsets.count))
+            chunkDone(ci, i)
         }
         padded = []
+        if let w = writer, w.resumeFrom > 0, (try? w.restorePrefix(into: &acc, weight: &counter)) == nil {
+            // The kept samples couldn't be read back after all: the whole split again, from nothing.
+            writer = nil
+            checkpoint?.discard()
+            return try separate(drums, checkpoint: checkpoint, progress: progress, isCancelled: isCancelled)
+        }
+        writer = nil
 
         // Normalise by the accumulated weights, then drop the reflect-padded border.
         // A weight of ~0 only happens where the numerator is ~0 too (the very last sample
         // of a single-chunk input), so emitting 0 there avoids a 0/0.
         var inv = [Float](repeating: 0, count: padLen)
-        for j in 0..<padLen { inv[j] = counter[j] > 1e-6 ? 1 / counter[j] : 0 }
+        for j in 0..<padLen { inv[j] = counter[j] > Self.weightFloor ? 1 / counter[j] : 0 }
 
         var out: [String: StereoAudio] = [:]
         var sum = [[Float]](repeating: [Float](repeating: 0, count: n), count: 2)

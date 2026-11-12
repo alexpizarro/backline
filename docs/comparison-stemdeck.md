@@ -1,6 +1,7 @@
 # Backline vs StemDeck: for a musician or student
 
-*Last updated 16 October 2026 for Backline 0.17. The first comparison, on 26 September, read both apps
+*Last updated 12 November 2026 for Backline 1.1 (the Backline column; the StemDeck column is as it was on
+24 October). The first comparison, on 26 September, read both apps
 from source (Backline 0.13, [StemDeck](https://github.com/stemdeckapp/stemdeck) 0.18.1). The StemDeck
 column was brought up to its 0.20.0 release from its release notes only, so check its page for the
 latest. StemDeck's own README comparison table is out of date (it still says there is no pitch shift or
@@ -26,12 +27,12 @@ out of a song and learn to play it.
 | **Click and count-in** | Click follows the detected beats; half/double time. Count-in is always 4 beats and the click volume is fixed | **Richer:** click volume, time signatures including odd meters (3+2+2), 0–4 bar count-in, beat grid you can correct with undo |
 | **Remembers each song** | Everything: mix, loop, speed, key, sections, position | Mix, key and sections; not loop or speed (on their roadmap) |
 | **Export** | One backing track (WAV/AIFF/MP3) **with your speed and key applied** | Mix, loop or **every stem** (WAV/MP3/FLAC/OGG), karaoke MP4, drag straight into a DAW. Speed is not applied |
-| **Getting songs in** | Files, YouTube link, **record from any app** (Spotify, Apple Music, a browser) | Files, YouTube, **SoundCloud, search inside the app, playlists, import queue** |
-| **Library** | Recently opened list | Folders, search, tags, favourites, trash |
+| **Getting songs in** | Files, a song or video link, a link to a song on a music service, a link to an audio file, **record from any app or a microphone** | Files, YouTube, **SoundCloud, search inside the app, playlists, import queue** |
+| **Library** | Recently opened list; search from eight songs | Folders, search, tags, favourites, trash |
 | **Mixer** | Faders, on/off, solo | Same, plus level meters |
 | **Practising next to tabs or a DAW** | **Mini player** floating above full-screen apps; single-key shortcuts; PageUp/PageDown for page-turner pedals | About 6 shortcuts; open it on a phone over Wi-Fi via QR code |
 | **Where it runs** | macOS 15 or newer, Apple silicon only | Mac (Intel too, macOS 13+), Windows, Linux, Docker; 11 languages |
-| **Install** | Signed and notarized DMG; opens normally. Gets two extra models (about 550 MB) by itself in the background, and works without them meanwhile | Unsigned on Mac (a Terminal command before first launch); downloads ~0.5 GB+ of runtime and models on first launch |
+| **Install** | Signed and notarized DMG; opens normally. Two extra models (about 550 MB) are offered in the player and fetched only after you say yes; it works without them | Unsigned on Mac (a Terminal command before first launch); downloads ~0.5 GB+ of runtime and models on first launch |
 | **Separation speed** | Core ML on the Apple GPU: a 3:51 song in about 5 s on an M3 Max | PyTorch; in our measurements that path was about 3× slower on the same Mac |
 | **Drums** | Split into kick, snare, hi-hats and other drums (since 0.17), and into bongó, güira and bombo in Dance mode | One drums stem |
 | **Practice modes** | **Play**, **Dance** (counts 1 to 8, "listen for" one instrument, loops of whole eights, 5-6-7-8 count-in) and **Beats** (loops of 1 to 8 bars, bar counter, singer off), one switch | One studio for everything |
@@ -72,5 +73,5 @@ the split is less clean.
 ## What Backline could take from StemDeck
 
 Individual stem export · click volume and count-in length · a shown tuning offset (it is already
-detected) · library search · a lead/backing vocal split · lyrics that follow the singer. (Beat and bar
+detected) · folders and tags in the library · a lead/backing vocal split · lyrics that follow the singer. (Beat and bar
 lines on the waveform came in 0.17 with the Dance and Beats modes.)

@@ -10,7 +10,10 @@ final class BeatTrackerTests: XCTestCase {
     static let package = root.appendingPathComponent("Backline/Resources/BeatThisSmall.mlpackage")
 
     func load(_ name: String) throws -> [Float] {
-        let d = try Data(contentsOf: Self.fixtures.appendingPathComponent(name))
+        let url = Self.fixtures.appendingPathComponent(name)
+        // The reference tensors are generated locally, not committed: a fresh clone skips these tests.
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: url.path), "no \(name); run ml/convert_beat_this.py to make ml/fixtures_beat")
+        let d = try Data(contentsOf: url)
         return d.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
     }
 

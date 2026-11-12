@@ -58,10 +58,10 @@ final class KeyboardRouter {
         case "l": model.toggleLoop(); return true
         case "o": if model.mode != .play { model.setOneHere() }; return true
         case "a": model.abPress(); return true
-        case "g": if !model.settings.removed.isEmpty { model.settings.guide.toggle() }; return true
-        case "k": model.settings.countIn.toggle(); return true
-        case "c": model.settings.click.toggle(); return true
-        case "r": model.settings.removed = []; model.settings.solo = nil; model.settings.spotlight = nil; return true
+        case "g": if !model.settings.removed.isEmpty { model.updateSettings { $0.guide.toggle() } }; return true
+        case "k": model.updateSettings { $0.countIn.toggle() }; return true
+        case "c": model.updateSettings { $0.click.toggle() }; return true
+        case "r": model.hearAll(); return true
         case "[": model.stepSpeed(-1); return true
         case "]": model.stepSpeed(1); return true
         case "-": model.stepPitch(-1); return true

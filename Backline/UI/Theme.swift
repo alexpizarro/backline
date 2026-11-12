@@ -1,57 +1,57 @@
 import BacklineKit
 import SwiftUI
 
-/// Design tokens from the Backline handoff (dark appearance only).
+/// Design tokens (the Soundcheck palette). Every value comes from `BacklineColors`, generated from
+/// `docs/design/tokens.json` — the same file the iOS app builds its colour sets from — so the Mac now
+/// follows the chosen look and Increase Contrast instead of being dark-only.
+///
+/// The names below are the Mac's own (`bg`, `card`, `muted`…) kept so every view reads one vocabulary;
+/// `Theme.tokens` is the palette for the current look, and each name maps to a token.
 enum Theme {
+    /// The palette for the current look. Set once at the root by `ChosenLook` (and by the snapshot
+    /// harness), so views draw the same look wherever they are.
+    static var tokens: BacklineColors = .dark
+    /// The dark look (or its Increase Contrast variant) is on.
+    static var isDark: Bool { tokens == .dark || tokens == .darkHc }
+
     // Surfaces / ink
-    static let bg = Color(hex: 0x0F0F14)
-    static let chrome = Color(hex: 0x13131B)
-    static let elevated = Color(hex: 0x181824)
-    static let card = Color(hex: 0x1F1F2C)
-    static let cardHover = Color(hex: 0x262636)
-    static let inset = Color(hex: 0x15151E)
-    static let toggleOff = Color(hex: 0x2E2E40)
-    static let ink = Color(hex: 0xF4F4F5)
-    static let ink2 = Color(hex: 0xD4D4D8)
-    static let muted = Color(hex: 0x8B8B9E)
-    static let hairline = Color.white.opacity(0.06)
-    static let hairline2 = Color.white.opacity(0.08)
-    static let hairline3 = Color.white.opacity(0.10)
-    static let inaudibleBar = Color(hex: 0x3A3A4C)
+    static var bg: Color { tokens.canvas }
+    static var chrome: Color { tokens.canvas }
+    static var elevated: Color { tokens.surface }
+    static var card: Color { tokens.raised }
+    static var cardHover: Color { tokens.pressed }
+    static var inset: Color { tokens.sunken }
+    static var toggleOff: Color { tokens.switchOff }
+    static var ink: Color { tokens.ink }
+    static var ink2: Color { tokens.ink2 }
+    static var ink3: Color { tokens.ink3 }
+    /// Kept as the Mac's name for tertiary text.
+    static var muted: Color { tokens.ink3 }
+    static var hairline: Color { tokens.hairline }
+    static var hairline2: Color { tokens.hairline }
+    static var hairline3: Color { tokens.stroke }
+    static var inaudibleBar: Color { tokens.waveOff }
 
     // Accent
-    static let primary = Color(hex: 0x6E56CF)
-    static let primaryHover = Color(hex: 0x7C66D9)
-    static let primaryTint = Color(hex: 0xA594F0)
-    static let magenta = Color(hex: 0xD946EF)
-    static let magentaText = Color(hex: 0xF0ABFC)
+    static var primary: Color { tokens.accent }
+    static var primaryHover: Color { tokens.accentPressed }
+    static var primaryTint: Color { tokens.accentText }
+    /// The Mac's old magenta highlight is the palette's accent-as-text.
+    static var magenta: Color { tokens.accent }
+    static var magentaText: Color { tokens.accentText }
 
     // Status
-    static let success = Color(hex: 0x22C55E)
-    static let warning = Color(hex: 0xF59E0B)
-    static let danger = Color(hex: 0xEF4444)
+    static var success: Color { tokens.ok }
+    static var warning: Color { tokens.caution }
+    static var danger: Color { tokens.live }
 
-    /// `oklch(0.72 0.15 hue)` → sRGB.
+    /// A part's colour at the token lightness for the current look.
     static func stemColor(hue: Double) -> Color {
-        let (r, g, b) = oklchToSRGB(l: 0.72, c: 0.15, h: hue)
-        return Color(.sRGB, red: r, green: g, blue: b)
+        tokens.stem(hue)
     }
 
     static func oklchToSRGB(l: Double, c: Double, h: Double) -> (Double, Double, Double) {
-        let hr = h * .pi / 180
-        let a = c * cos(hr), b = c * sin(hr)
-        let l_ = l + 0.3963377774 * a + 0.2158037573 * b
-        let m_ = l - 0.1055613458 * a - 0.0638541728 * b
-        let s_ = l - 0.0894841775 * a - 1.2914855480 * b
-        let L = l_ * l_ * l_, M = m_ * m_ * m_, S = s_ * s_ * s_
-        let rl = 4.0767416621 * L - 3.3077115913 * M + 0.2309699292 * S
-        let gl = -1.2684380046 * L + 2.6097574011 * M - 0.3413193965 * S
-        let bl = -0.0041960863 * L - 0.7034186147 * M + 1.7076147010 * S
-        func gamma(_ x: Double) -> Double {
-            let v = max(0, min(1, x))
-            return v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1 / 2.4) - 0.055
-        }
-        return (gamma(rl), gamma(gl), gamma(bl))
+        BacklineColors.oklchToSRGB(l: l, c: c, h: h)
     }
 }
 
@@ -212,5 +212,28 @@ enum GlassSurfaceOverride {
 extension View {
     func glassSurface<S: Shape>(_ shape: S, tint: Color? = nil, fallback: Color = Theme.chrome, interactive: Bool = false) -> some View {
         modifier(GlassSurface(shape: shape, tint: tint, fallback: fallback, interactive: interactive))
+    }
+}
+
+// MARK: - Motion
+
+/// Reduce Motion (WP5): with it on, the player's springs, slides and morphs become instant changes.
+enum Motion {
+    static var reduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    /// For `withAnimation`: nil (no animation) when Reduce Motion is on.
+    static func animation(_ a: Animation) -> Animation? { reduced ? nil : a }
+}
+
+private struct MotionModifier<V: Equatable>: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduce
+    let animation: Animation?
+    let value: V
+    func body(content: Content) -> some View { content.animation(reduce ? nil : animation, value: value) }
+}
+
+extension View {
+    /// `.animation(_:value:)` that stands still under Reduce Motion.
+    func motion<V: Equatable>(_ animation: Animation?, value: V) -> some View {
+        modifier(MotionModifier(animation: animation, value: value))
     }
 }

@@ -6,13 +6,17 @@ struct StemRow: View {
     @Environment(\.layoutWidth) private var layout
     let kind: StemKind
     let index: Int
+    /// Listed under "More parts": probably not in this song (U05). It still plays and stays controllable.
+    var quiet = false
     @State private var hover = false
+    /// The fader's value while it is being dragged (nil otherwise).
+    @State private var dragVolume: Double?
 
     var body: some View {
         let on = model.isOn(kind)
         let audible = model.isAudible(kind)
         let soloed = model.settings.solo == kind
-        let vol = model.settings.volume(kind)
+        let shown = dragVolume ?? model.settings.volume(kind)
         HStack(spacing: 14) {
             StemToggle(isOn: on, color: kind.color) { model.toggle(kind) }
                 .help(on ? "Remove \(model.label(kind).lowercased())" : "Bring \(model.label(kind).lowercased()) back")
@@ -27,7 +31,7 @@ struct StemRow: View {
                         .minimumScaleFactor(0.85)
                         .foregroundStyle(on ? Theme.ink : Theme.muted)
                     if model.mode == .beats, kind == .other, model.musicCanOpen, !model.musicIsOpen {
-                        Button { withAnimation(.smooth(duration: 0.25)) { model.toggleMusicOpen() } } label: {
+                        Button { withAnimation(Motion.animation(.smooth(duration: 0.25))) { model.toggleMusicOpen() } } label: {
                             Image(systemName: "chevron.right.circle.fill")
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundStyle(Theme.primaryTint)
@@ -50,32 +54,35 @@ struct StemRow: View {
             .frame(width: layout == .compact ? 110 : 130, alignment: .leading)
 
             if layout == .compact { Spacer(minLength: 0) } else {
-            StemWaveform(peaks: model.rowPeaks(kind), color: kind.color, audible: audible, volume: vol)
+            // Drawn by Metal with the playhead from the transport clock, so the row never re-renders while the
+            // song plays (UIP-07).
+            WaveformView(config: WaveformConfig(
+                values: model.rowPeaks(kind), normalize: true,
+                barColor: audible ? kind.color : Theme.inaudibleBar, playedColor: nil,
+                barAlpha: audible ? 0.35 + 0.65 * shown / 100 : 0.5, minBarHeight: 2, barPitch: 4, gap: 2,
+                duration: max(model.duration, 0.001), showPlayhead: true, playheadColor: Theme.ink.opacity(0.5),
+                playheadWidth: 1, glow: 0, dark: Theme.isDark))
                 .frame(height: model.stems.count <= 4 ? 48 : 36)
-                .overlay {
-                    GeometryReader { g in
-                        Rectangle().fill(Color.white.opacity(0.5)).frame(width: 1)
-                            .offset(x: g.size.width * model.position / max(model.duration, 0.001))
-                    }
-                    .allowsHitTesting(false)
-                }
-                .overlay {
-                    GeometryReader { g in
-                        Color.clear.contentShape(Rectangle())
-                            .onTapGesture(coordinateSpace: .local) { p in
-                                model.seek(to: Double(max(0, min(g.size.width, p.x)) / g.size.width) * model.duration)
-                            }
-                    }
-                }
-
+                // Part rows never seek (3.4): a stray tap on a part must not lose your place in the song.
+                // Seeking lives on the Map, where it is one gesture and one engine seek.
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             }
 
             SoloButton(active: soloed) { model.toggleSolo(kind) }
 
-            StemSlider(value: Binding(get: { vol }, set: { model.setVolume(kind, $0) }), tint: kind.color, enabled: audible)
+            // A drag is heard at once but written once, on release (UIP-03); the number follows the drag.
+            StemSlider(value: shown, tint: kind.color, enabled: audible,
+                       onDrag: { v in
+                           if v != dragVolume { dragVolume = v; model.previewVolume(kind, v) }
+                       },
+                       onCommit: { v in
+                           dragVolume = nil
+                           model.setVolume(kind, v)
+                       })
                 .frame(width: 110)
                 .accessibilityLabel("\(model.label(kind)) volume")
-            Text("\(Int(vol))")
+            Text("\(Int(shown))")
                 .font(Typo.mono(11))
                 .foregroundStyle(Theme.muted)
                 .frame(width: 30, alignment: .trailing)
@@ -92,8 +99,9 @@ struct StemRow: View {
                 .strokeBorder(Color.white.opacity(hover ? 0.06 : 0))
         )
         .onHover { hover = $0 }
-        .animation(.smooth(duration: 0.2), value: on)
-        .animation(.smooth(duration: 0.2), value: audible)
+        .opacity(quiet ? 0.72 : 1)
+        .motion(.smooth(duration: 0.2), value: on)
+        .motion(.smooth(duration: 0.2), value: audible)
         .contextMenu {
             Button(on ? "Remove \(model.label(kind))" : "Bring Back \(model.label(kind))") { model.toggle(kind) }
             Button(soloed ? "Hear All Parts" : "Hear Only \(model.label(kind))") { model.toggleSolo(kind) }
@@ -103,7 +111,7 @@ struct StemRow: View {
     }
 
     func status(on: Bool, audible: Bool) -> String {
-        if kind == .drums, let p = model.drumSplitProgress { return "Splitting the kit · \(Int(p * 100))%" }
+        if kind == .drums, let p = model.drumSplitProgress { return p < 0.01 ? "Splitting kit…" : "Splitting kit \(Int(p * 100))%" }
         if kind == .drums, model.mode == .beats, model.downloadingModel == DrumSeparator.modelName,
            let p = model.modelDownloadProgress { return "Getting the kit model · \(Int(p * 100))%" }
         if model.settings.solo == kind && !on { return "Alone · not saved" }
@@ -133,7 +141,7 @@ struct StemToggle: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isOn)
+        .motion(.spring(response: 0.25, dampingFraction: 0.75), value: isOn)
     }
 }
 
@@ -155,17 +163,31 @@ struct SoloButton: View {
         .help(active ? "Hear all parts again" : "Hear only this part")
         .accessibilityLabel("Hear only this part")
         .accessibilityAddTraits(active ? .isSelected : [])
-        .animation(.easeOut(duration: 0.12), value: active)
+        .motion(.easeOut(duration: 0.12), value: active)
     }
 }
 
-/// Thin tinted volume slider (0–100).
+/// Thin tinted volume slider (0–100). A drag reports each new value to `onDrag` and the last one to `onCommit`;
+/// a double-click resets to 80, and VoiceOver's adjustments commit at once.
 struct StemSlider: View {
-    @Binding var value: Double
+    let value: Double
     let tint: Color
     var enabled = true
+    var onDrag: (Double) -> Void
+    var onCommit: (Double) -> Void
     @State private var dragging = false
     @State private var hover = false
+    /// The last step this drag reached, committed when it ends.
+    @State private var dragged: Double?
+    /// True while the button is down. SwiftUI puts it back when the gesture ends or the system cancels it, and a
+    /// cancelled gesture never calls `onEnded`; so this is what commits a cancelled drag, which the engine was
+    /// already playing (release review ios-ui-links#3).
+    @GestureState private var held = false
+
+    static func value(atX x: CGFloat, width: CGFloat) -> Double {
+        guard width > 0 else { return 0 }
+        return (Double(max(0, min(width, x)) / width) * 100).rounded()
+    }
 
     var body: some View {
         GeometryReader { g in
@@ -183,48 +205,33 @@ struct StemSlider: View {
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)
-                .onChanged { v in dragging = true; value = (max(0, min(w, v.location.x)) / w * 100).rounded() }
-                .onEnded { _ in dragging = false })
-            .onTapGesture(count: 2) { value = 80 }
+                .updating($held) { _, held, _ in held = true }
+                .onChanged { v in
+                    dragging = true
+                    let nv = Self.value(atX: v.location.x, width: w)
+                    dragged = nv
+                    if nv != value { onDrag(nv) }
+                }
+                .onEnded { v in
+                    dragged = Self.value(atX: v.location.x, width: w)
+                    finishDrag()
+                })
+            .onChange(of: held) { _, down in if !down { finishDrag() } }
+            .onTapGesture(count: 2) { onCommit(80) }
             .onHover { hover = $0 }
         }
         .frame(height: 20)
-        .animation(.easeOut(duration: 0.1), value: dragging || hover)
+        .motion(.easeOut(duration: 0.1), value: dragging || hover)
         .accessibilityRepresentation {
-            Slider(value: $value, in: 0...100, step: 1)
-        }
-    }
-}
-
-struct StemWaveform: View {
-    let peaks: [Float]
-    let color: Color
-    let audible: Bool
-    let volume: Double
-
-    var body: some View {
-        GeometryReader { g in
-            let count = max(20, Int(g.size.width / 4))
-            let bars = normalised(Peaks.resample(peaks, to: count))
-            Canvas { ctx, size in
-                let gap: CGFloat = 2
-                let w = max(1, (size.width - gap * CGFloat(count - 1)) / CGFloat(count))
-                var path = Path()
-                for (i, v) in bars.enumerated() {
-                    let h = max(2, CGFloat(v) * size.height)
-                    path.addRoundedRect(in: CGRect(x: CGFloat(i) * (w + gap), y: (size.height - h) / 2, width: w, height: h),
-                                        cornerSize: CGSize(width: 1, height: 1))
-                }
-                ctx.fill(path, with: .color(audible ? color : Theme.inaudibleBar))
-            }
-            .opacity(audible ? 0.35 + 0.65 * volume / 100 : 0.5)
-            .drawingGroup()
+            Slider(value: Binding(get: { value }, set: { onCommit($0.rounded()) }), in: 0...100, step: 1)
         }
     }
 
-    /// Per-stem normalisation with a gentle curve so quiet stems are still readable.
-    func normalised(_ b: [Float]) -> [Float] {
-        let m = max(b.max() ?? 1, 1e-6)
-        return b.map { pow($0 / m, 0.8) }
+    /// The button came up or the system cancelled the drag: the one write, once (whichever comes first).
+    private func finishDrag() {
+        dragging = false
+        guard let v = dragged else { return }
+        dragged = nil
+        onCommit(v)
     }
 }

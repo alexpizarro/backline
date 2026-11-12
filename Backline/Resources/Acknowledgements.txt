@@ -39,25 +39,16 @@ LAME MP3 encoder - GNU Library General Public License v2
 Loaded dynamically from Contents/Frameworks/libmp3lame.0.dylib; you may replace this library.
 Source: https://lame.sourceforge.io/  (full licence text: LAME-COPYING.txt)
 
-yt-dlp (YouTube audio download) - The Unlicense (public domain)
-https://github.com/yt-dlp/yt-dlp - compiled from the official source release to native arm64 code with
-Nuitka (https://nuitka.net; the compiler is AGPL-3.0, its compiled output is not covered by the AGPL) and
-bundled in Contents/Resources/yt-dlp together with:
-  CPython runtime - Python Software Foundation License
-  certifi - Mozilla Public License 2.0 (CA certificate bundle)
-  pycryptodomex - BSD 2-Clause / Public Domain
-  Brotli - MIT
-  websockets - BSD 3-Clause
-  requests - Apache License 2.0
-  urllib3 - MIT
-  yt-dlp-ejs - The Unlicense
-Licence texts are inside Contents/Resources/yt-dlp.
+yt-dlp-ejs 0.8.0 (the challenge solver for web links) - The Unlicense (public domain); it bundles
+meriyah (ISC License) and astring (MIT License). From the yt-dlp project, https://github.com/yt-dlp/ejs.
+Run in Apple's JavaScriptCore inside the app (full text: LICENSE-ejs.txt).
 
-QuickJS-NG (JavaScript runtime for yt-dlp) - MIT License
-Copyright (c) 2017-2026 Fabrice Bellard, Charlie Gordon, and QuickJS-NG contributors
-https://github.com/quickjs-ng/quickjs (full text: Contents/Resources/yt-dlp/QuickJS-LICENSE.txt)
+bgutils-js 4.0.3 by LuanRT - MIT License (Copyright (c) 2024 LuanRT). Its BotGuard and proof-of-origin
+minting steps are ported in potoken.js, which runs in a hidden web view only when a video link asks for proof
+of origin. https://github.com/LuanRT/BgUtils
 
 Plus Jakarta Sans and JetBrains Mono - SIL Open Font License 1.1 (see OFL-*.txt)
+Permanent Marker by Font Diner - Apache License 2.0 (see LICENSE-PermanentMarker.txt)
 
 Algorithms adapted from: go-play-in-the-band (MIT, tempo/key/progressive tempo),
 JammLab (MIT, single-source-node playback design), MSAF (MIT, Foote novelty segmentation).

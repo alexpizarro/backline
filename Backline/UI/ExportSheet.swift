@@ -90,7 +90,6 @@ struct ExportSheet: View {
         .padding(22)
         .frame(width: 440)
         .background(Theme.card)
-        .preferredColorScheme(.dark)
     }
 
     var included: String {

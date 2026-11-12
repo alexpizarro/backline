@@ -112,6 +112,71 @@ enum Snapshotter {
         try? log.write(to: dir.appendingPathComponent("modes.txt"), atomically: true, encoding: .utf8)
     }
 
+    /// One pasted link, screen by screen: `link-1-getting.png` at once, then whichever sheet or screen it reaches
+    /// (`link-picker`, `link-ask`, `link-others` after "Not this" or "Wrong song?", `link-another-way`, `link-failed`),
+    /// and `link.txt` with what happened. With `--spotify-stub` nothing is fetched; a match stops before the download.
+    static func linkShots(model: AppModel, text: String, dir: URL) async {
+        var log = "openText=\(model.openText(text)) screen=\(model.screen)\n"
+        try? await Task.sleep(for: .seconds(0.8))
+        capture(dir.appendingPathComponent("link-1-getting.png"))
+        var waited = 0.0
+        var shotAnotherWay = false
+        while waited < 60 {
+            try? await Task.sleep(for: .seconds(0.25)); waited += 0.25
+            if model.tryingAnotherWay && !shotAnotherWay {
+                shotAnotherWay = true
+                try? await Task.sleep(for: .seconds(0.5))
+                capture(dir.appendingPathComponent("link-another-way.png"))
+            }
+            if model.spotify.picker != nil {
+                try? await Task.sleep(for: .seconds(0.8))
+                capture(dir.appendingPathComponent("link-picker.png"))
+                log += "picker tracks=\(model.spotify.picker?.list.tracks.map(\.title) ?? [])\n"
+                break
+            }
+            if let ask = model.spotify.ask {
+                try? await Task.sleep(for: .seconds(0.8))
+                capture(dir.appendingPathComponent("link-ask.png"))
+                log += "ask \(ask.choice.candidate.videoID) gap=\(ask.choice.gap)\n"
+                model.refuseSpotifyCandidate(ask)
+                try? await Task.sleep(for: .seconds(1.0))
+                if model.spotify.others != nil { capture(dir.appendingPathComponent("link-others.png")) }
+                log += "after Not this: others=\(model.spotify.others?.choices.count ?? 0)\n"
+                break
+            }
+            if !model.spotify.finding, model.spotify.matched != nil {
+                try? await Task.sleep(for: .seconds(0.8))
+                capture(dir.appendingPathComponent("link-2-matched.png"))
+                log += "matched \(model.spotify.matched?.result.best?.candidate.videoID ?? "-") title=\(model.importTitle) artist=\(model.importArtist)\n"
+                model.showOtherSpotifyCandidates()
+                try? await Task.sleep(for: .seconds(1.0))
+                capture(dir.appendingPathComponent("link-others.png"))
+                log += "wrong song: others=\(model.spotify.others?.choices.map(\.candidate.videoID) ?? [])\n"
+                break
+            }
+            if case .failed(let m) = model.screen {
+                try? await Task.sleep(for: .seconds(2.0))
+                // A window that is covered (other apps in front, a locked screen) never finishes SwiftUI's
+                // transitions, so the screen that is leaving stays drawn: put the failure back without one.
+                if NSApp.windows.first(where: { $0.isVisible && !($0 is MiniPanel) })?.occlusionState.contains(.visible) == false {
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { model.screen = .empty }
+                    try? await Task.sleep(for: .seconds(0.3))
+                    withTransaction(t) { model.screen = .failed(m) }
+                    try? await Task.sleep(for: .seconds(0.5))
+                }
+                capture(dir.appendingPathComponent("link-failed.png"))
+                log += "failed: \(m)\n"
+                break
+            }
+            if model.screen != .analyzing { break }
+        }
+        log += "end screen=\(model.screen) toast=\(model.toast?.text ?? "-") after \(waited) s\n"
+        try? log.write(to: dir.appendingPathComponent("link.txt"), atomically: true, encoding: .utf8)
+        model.dismissSpotifySheet()
+        model.cancelImport()
+    }
+
     static func run(model: AppModel) {
         guard let dir = outputDir else { return }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -119,9 +184,10 @@ enum Snapshotter {
         if !CommandLine.arguments.contains("--help-shots") { model.showWelcome = false }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(1.5))
+            #if BACKLINE_YTDLP
             if CommandLine.arguments.contains("--qjs-probe") {
                 // Runs the sandboxed helper with a player client that needs the JS challenge solver.
-                let helper = YouTubeImport.helperURL!, qjs = YouTubeImport.jsRuntimeURL!
+                let helper = YTDLPImport.helperURL!, qjs = YTDLPImport.jsRuntimeURL!
                 let p = Process()
                 p.executableURL = helper
                 p.arguments = ["--ignore-config", "--no-plugin-dirs", "--no-cookies-from-browser", "--no-cookies",
@@ -140,6 +206,45 @@ enum Snapshotter {
                 NSApp.terminate(nil)
                 return
             }
+            #endif
+            if CommandLine.arguments.contains("--library-shot") {
+                // What the launch made of the last run (D20 d): the Library's unfinished rows and the journal.
+                await model.libraryReady()
+                if !CommandLine.arguments.contains("--background") { await bringToFront() }
+                try? await Task.sleep(for: .seconds(0.8))
+                capture(dir.appendingPathComponent("library.png"))
+                let j = WorkJournal.shared.snapshot
+                let lines = model.unfinishedImports.map { "unfinished \($0.id) title=\($0.entry.title) stage=\($0.entry.stage) "
+                    + "staged=\($0.entry.staged) external=\($0.entry.external ?? "-") bookmark=\($0.entry.bookmark != nil) "
+                    + "line=\(AppModel.unfinishedLine($0))" }
+                    + ["running=\(j.running?.id ?? "-") passes=\(j.passes.count) failures=\(j.failures)"]
+                try? lines.joined(separator: "\n").write(to: dir.appendingPathComponent("journal.txt"), atomically: true, encoding: .utf8)
+                NSApp.terminate(nil)
+                return
+            }
+            if CommandLine.arguments.contains("--carry-on-unfinished") {
+                // R3: a click on the unfinished song carries on its split from the checkpoint and opens the song.
+                await model.libraryReady()
+                var lines: [String] = []
+                if let u = model.unfinishedImports.first {
+                    let t0 = Date()
+                    lines.append("unfinished \(u.id) line=\(AppModel.unfinishedLine(u))")
+                    lines.append("checkpoint before: \(FileManager.default.fileExists(atPath: PassCheckpoints.directory(.importSplit, u.id).path))")
+                    model.retryUnfinished(u)
+                    for _ in 0..<2400 where model.screen != .mixer {
+                        if case .failed = model.screen { break }
+                        try? await Task.sleep(for: .milliseconds(100))
+                    }
+                    lines.append("screen=\(model.screen == .mixer ? "mixer" : "not mixer") song=\(model.song?.id ?? "-") after \(String(format: "%.1f", Date().timeIntervalSince(t0))) s")
+                    lines.append("checkpoint after: \(FileManager.default.fileExists(atPath: PassCheckpoints.directory(.importSplit, u.id).path))")
+                    lines.append("unfinished rows left: \(model.unfinishedImports.count)")
+                } else {
+                    lines.append("no unfinished import")
+                }
+                try? lines.joined(separator: "\n").write(to: dir.appendingPathComponent("carry-on.txt"), atomically: true, encoding: .utf8)
+                NSApp.terminate(nil)
+                return
+            }
             if CommandLine.arguments.contains("--time-import"), let song = songArg {
                 // Wall-clock time from "open" to the mixer, with the phase breakdown.
                 let t0 = Date(); var marks: [String] = []; var last = -1
@@ -147,9 +252,9 @@ enum Snapshotter {
                 while model.screen != .mixer {
                     if case .failed = model.screen { break }
                     if model.importProgress.phase != last { last = model.importProgress.phase; marks.append("phase \(last) at \(String(format: "%.1f", Date().timeIntervalSince(t0)))s") }
-                    try? await Task.sleep(for: .milliseconds(100))
+                    try? await Task.sleep(for: .milliseconds(5))
                 }
-                marks.append("mixer at \(String(format: "%.1f", Date().timeIntervalSince(t0)))s split=\(model.song?.guitarSplit?.method ?? "-")")
+                marks.append("mixer at \(String(format: "%.3f", Date().timeIntervalSince(t0)))s split=\(model.song?.guitarSplit?.method ?? "-")")
                 try? marks.joined(separator: "\n").write(to: dir.appendingPathComponent("timing.txt"), atomically: true, encoding: .utf8)
                 NSApp.terminate(nil)
                 return
@@ -234,17 +339,17 @@ enum Snapshotter {
                 return
             }
             if CommandLine.arguments.contains("--cancel-probe") {
-                // Start a real download, cancel after 1.5 s: must throw CancellationError quickly and
-                // leave no files for that video behind.
+                // Start a real download, cancel at 30 %: must throw CancellationError quickly and leave no
+                // files for that video behind. (The Swift engine gets this video in about a second, so a
+                // cancel after a fixed time would come too late.)
                 let video = YouTubeImport.parse("https://www.youtube.com/watch?v=CD-E-LDc384")!
                 let flag = CancelFlag()
                 let t0 = Date()
-                Task { try? await Task.sleep(for: .seconds(1.5)); flag.set() }
                 var result = ""
-                do { _ = try await YouTubeImport.download(video, progress: { _ in }, isCancelled: { flag.value }); result = "finished (not cancelled)" }
+                do { _ = try await YouTubeImport.download(video, progress: { if $0 >= 0.3 { flag.set() } }, isCancelled: { flag.value }); result = "finished (not cancelled)" }
                 catch is CancellationError { result = "cancelled" }
                 catch { result = "error: \(error.localizedDescription)" }
-                let left = ((try? FileManager.default.contentsOfDirectory(atPath: YouTubeImport.downloadsDirectory.path)) ?? []).filter { $0.hasPrefix(video.id) }
+                let left = ((try? FileManager.default.contentsOfDirectory(atPath: ImportStaging.downloadsDirectory.path)) ?? []).filter { $0.hasPrefix(video.id) }
                 try? "\(result) in \(String(format: "%.1f", Date().timeIntervalSince(t0)))s leftovers=\(left)".write(to: dir.appendingPathComponent("cancel.txt"), atomically: true, encoding: .utf8)
                 NSApp.terminate(nil)
                 return
@@ -255,7 +360,22 @@ enum Snapshotter {
                 return
             }
             if CommandLine.arguments.contains("--readme-shots") {
-                await readmeShots(model: model, dir: dir)
+                // --store-shots: the Mac App Store's size. The whole window, title bar included, is 1280 x 800
+                // points (2560 x 1600 pixels on a Retina screen; 1440 x 900 doesn't fit beside the Dock on a 14-inch screen), in front so the Metal views draw, with the
+                // Library beside the player.
+                let store = CommandLine.arguments.contains("--store-shots")
+                if store, let w = NSApp.windows.first(where: { $0.isVisible && !($0 is MiniPanel) }) {
+                    await bringToFront()
+                    let visible = (w.screen ?? NSScreen.main)?.visibleFrame ?? .zero
+                    w.setFrame(NSRect(x: visible.minX + 20, y: visible.maxY - 800, width: 1280, height: 800), display: true)
+                    try? await Task.sleep(for: .seconds(0.8))
+                }
+                await readmeShots(model: model, dir: dir, keepSidebar: store)
+                NSApp.terminate(nil)
+                return
+            }
+            if CommandLine.arguments.contains("--sheet-shots") {
+                await sheetShots(model: model, dir: dir)
                 NSApp.terminate(nil)
                 return
             }
@@ -273,6 +393,7 @@ enum Snapshotter {
                 }
             }
             capture(dir.appendingPathComponent("1-empty.png"))
+            if await extraPartsRun(model: model, dir: dir) { NSApp.terminate(nil); return }
             // --wait-models: let the background model downloads run, then report what got installed.
             if CommandLine.arguments.contains("--wait-models") {
                 let t0 = Date()
@@ -294,6 +415,13 @@ enum Snapshotter {
                 NSApp.terminate(nil)
                 return
             }
+            // --link <text> [--spotify-stub match|ask|none|playlist] [--song-service-stub fail]: a pasted link's
+            // screens and sheets (paritymac WP2), without splitting.
+            if let i = CommandLine.arguments.firstIndex(of: "--link"), i + 1 < CommandLine.arguments.count {
+                await linkShots(model: model, text: CommandLine.arguments[i + 1], dir: dir)
+                NSApp.terminate(nil)
+                return
+            }
             if let i = CommandLine.arguments.firstIndex(of: "--youtube"), i + 1 < CommandLine.arguments.count,
                let video = YouTubeImport.parse(CommandLine.arguments[i + 1]) {
                 model.openYouTube(video)
@@ -310,13 +438,17 @@ enum Snapshotter {
                 try? await Task.sleep(for: .seconds(1.0))
                 capture(dir.appendingPathComponent("3-mixer.png"))
                 if let s = model.song {
-                    try? "title=\(s.title) artist=\(s.artist ?? "-") source=\(s.sourceName) stems=\(model.stems.map(\.rawValue)) removed=\(model.settings.removed.map(\.rawValue)) bpm=\(s.analysis.bpm) split=\(s.guitarSplit?.method ?? "none") downloadsLeft=\((try? FileManager.default.contentsOfDirectory(atPath: YouTubeImport.downloadsDirectory.path)) ?? [])"
+                    try? "title=\(s.title) artist=\(s.artist ?? "-") source=\(s.sourceName) stems=\(model.stems.map(\.rawValue)) removed=\(model.settings.removed.map(\.rawValue)) bpm=\(s.analysis.bpm) split=\(s.guitarSplit?.method ?? "none") downloadsLeft=\((try? FileManager.default.contentsOfDirectory(atPath: ImportStaging.downloadsDirectory.path)) ?? [])"
                         .write(to: dir.appendingPathComponent("status.txt"), atomically: true, encoding: .utf8)
                 }
                 NSApp.terminate(nil)
                 return
             }
             if let song = songArg {
+                var metalLog = ""
+                // A covered window draws no Metal frames (the scheduler skips what can't be seen), so the
+                // captures of the player are taken with the window in front; --background keeps it behind.
+                if !CommandLine.arguments.contains("--background") { await bringToFront() }
                 model.open(song)
                 try? await Task.sleep(for: .seconds(1.2))
                 capture(dir.appendingPathComponent("2-analyzing.png"))
@@ -327,9 +459,11 @@ enum Snapshotter {
                 }
                 try? await Task.sleep(for: .seconds(1.0))
                 capture(dir.appendingPathComponent("3-mixer.png"))
+                metalLog += "at 3-mixer:\n" + WaveformScheduler.shared.debugReport() + "\n"
+                try? metalLog.write(to: dir.appendingPathComponent("metal.txt"), atomically: true, encoding: .utf8)
                 if CommandLine.arguments.contains("--wait-hq") {
                     // The cleaner pass runs after the song opens; wait for it, then for the drum kit in Beats.
-                    var log = "opened: separator=\(model.song?.separator ?? "htdemucs") original=\(model.song?.originalScale != nil) stems=\(model.stems.map(\.rawValue))\n"
+                    var log = "opened: separator=\(model.song?.separator ?? "htdemucs") original=\(model.song.flatMap { $0.originalFile ?? ($0.originalScale != nil ? "original.caf" : nil) } ?? "none") stems=\(model.stems.map(\.rawValue))\n"
                     let t0 = Date()
                     while (model.song?.separator == nil || model.pendingRecord != nil) && Date().timeIntervalSince(t0) < 900 {
                         try? await Task.sleep(for: .seconds(1))
@@ -359,12 +493,25 @@ enum Snapshotter {
                     model.togglePlay()
                     try? await Task.sleep(for: .seconds(0.4))
                 }
+                if CommandLine.arguments.contains("--zoom") {
+                    // The Map zoomed to a quarter of the song with a loop, and the section strip over it (WP5).
+                    let whole = MapWindow.whole(model.duration)
+                    model.setLoop(start: model.duration * 0.35, end: model.duration * 0.45)
+                    model.mapWindow = whole.zoomed(length: model.duration / 4, keeping: model.duration * 0.4, atX: 0.5, width: 1)
+                    try? await Task.sleep(for: .seconds(0.8))
+                    capture(dir.appendingPathComponent("4c-zoomed.png"))
+                    model.mapWindow = whole
+                    model.updateSettings { $0.loopEnabled = false }
+                    try? await Task.sleep(for: .seconds(0.4))
+                }
                 if !CommandLine.arguments.contains("--no-play") {
                     let before = model.position
                     model.settings.countIn = false
                     model.togglePlay()
                     try? await Task.sleep(for: .seconds(2.5))
                     capture(dir.appendingPathComponent("4-playing.png"))
+                    metalLog += "at 4-playing:\n" + WaveformScheduler.shared.debugReport() + "\n"
+                    try? metalLog.write(to: dir.appendingPathComponent("metal.txt"), atomically: true, encoding: .utf8)
                     let after = model.position
                     model.togglePlay()
                     try? "played \(before) -> \(after) playing=\(model.isPlaying)\n".write(
@@ -411,8 +558,10 @@ enum Snapshotter {
                 if let window = NSApp.windows.first(where: { $0.isVisible && !$0.title.contains("Mini") }) {
                     let original = window.frame
                     window.setFrame(NSRect(x: original.minX, y: original.minY, width: WindowLimits.minContentWidth, height: WindowLimits.minHeight), display: true, animate: false)
+                    if !CommandLine.arguments.contains("--background") { await bringToFront() }
                     for _ in 0..<6 { try? await Task.sleep(for: .seconds(0.3)); window.contentView?.layoutSubtreeIfNeeded(); window.displayIfNeeded() }
                     capture(dir.appendingPathComponent("7-narrow.png"))
+                    metalLog += "at 7-narrow:\n" + WaveformScheduler.shared.debugReport() + "\n"
                     window.setFrame(original, display: true)
                     try? await Task.sleep(for: .seconds(0.5))
                 }
@@ -420,6 +569,8 @@ enum Snapshotter {
                 try? await Task.sleep(for: .seconds(1.2))
                 if let mini = NSApp.windows.first(where: { $0.isVisible && $0 is MiniPanel }) {
                     captureWindow(mini, to: dir.appendingPathComponent("8-mini.png"))
+                    metalLog += "at 8-mini:\n" + WaveformScheduler.shared.debugReport() + "\n"
+                    try? metalLog.write(to: dir.appendingPathComponent("metal.txt"), atomically: true, encoding: .utf8)
                     try? "mini frame \(mini.frame) level \(mini.level.rawValue)\n".write(
                         to: dir.appendingPathComponent("mini.txt"), atomically: true, encoding: .utf8)
                 }
@@ -438,6 +589,7 @@ enum Snapshotter {
         }
     }
 
+#if BACKLINE_YTDLP
     /// End-to-end check of the sign-in cookie path without a real Google account: plant a fake YouTube
     /// login cookie in the private store, export it, run the sandboxed yt-dlp with it, confirm the file is
     /// deleted afterwards, then sign out and confirm the store is empty. Writes cookie-probe.txt (no values).
@@ -455,13 +607,13 @@ enum Snapshotter {
         log += "cookieFile perms=\(String(format: "%o", (attrs?[.posixPermissions] as? Int) ?? 0)) lines=\((try? String(contentsOf: file, encoding: .utf8))?.split(separator: "\n").filter { !$0.hasPrefix("# ") && !$0.isEmpty }.count ?? -1)\n"
         let video = YouTubeImport.parse("https://youtu.be/2pXa5jzaOBg")!
         do {
-            let r = try await YouTubeImport.download(video, cookieFile: file, progress: { _ in }, isCancelled: { false })
+            let r = try await YTDLPImport.download(video, cookieFile: file, progress: { _ in }, isCancelled: { false })
             log += "download ok title=\(r.title ?? "-")\n"
             try? FileManager.default.removeItem(at: r.file)
         } catch { log += "download error: \(error.localizedDescription)\n" }
         await YouTubeSignIn.finish(cookieFile: file)
         log += "cookieFile deleted=\(!FileManager.default.fileExists(atPath: file.path))\n"
-        let ytlog = (try? String(contentsOf: YouTubeImport.downloadsDirectory.appendingPathComponent("last-error.log"), encoding: .utf8)) ?? ""
+        let ytlog = (try? String(contentsOf: ImportStaging.downloadsDirectory.appendingPathComponent("last-error.log"), encoding: .utf8)) ?? ""
         log += "log mentions cookie value=\(ytlog.contains("backline-probe")) signedInFlag=\(ytlog.contains("signedIn=true"))\n"
         await YouTubeSignIn.signOut()
         let left = await YouTubeSignIn.cookies()
@@ -469,6 +621,37 @@ enum Snapshotter {
         write(log, dir)
     }
 
+#else
+    /// End-to-end check of the sign-in cookie path without a real Google account: plant a fake YouTube
+    /// login cookie in the private store, read it back as the engine does, download a video with it (the
+    /// engine goes anonymous first and sends the session only when YouTube asks), then sign out and confirm
+    /// the store is empty. Writes cookie-probe.txt (no values).
+    static func cookieProbe(dir: URL) async {
+        var log = ""
+        let fake = HTTPCookie(properties: [.domain: ".youtube.com", .path: "/", .name: "LOGIN_INFO",
+                                           .value: "backline-probe", .secure: "TRUE",
+                                           .expires: Date().addingTimeInterval(3600)])!
+        await YouTubeSignIn.store.httpCookieStore.setCookie(fake)
+        await YouTubeSignIn.refreshStatus()
+        log += "signedIn(after plant)=\(YouTubeSignIn.isSignedIn)\n"
+        let cookies = await YouTubeSignIn.cookies()
+        let jar = YouTubeCookies(cookies)
+        log += "jar cookies=\(jar.entries.map { "\($0.domain)/\($0.name)" }) signedIn=\(jar.isSignedIn) "
+            + "header for youtube.com=\(jar.header(for: URL(string: "https://www.youtube.com/")!) != nil) "
+            + "header for example.com=\(jar.header(for: URL(string: "https://example.com/")!) != nil)\n"
+        let video = YouTubeImport.parse("https://youtu.be/2pXa5jzaOBg")!
+        do {
+            let r = try await YouTubeImport.download(video, cookies: cookies, progress: { _ in }, isCancelled: { false })
+            log += "download ok title=\(r.title ?? "-") client=\(r.clientID ?? "-")\n"
+            try? FileManager.default.removeItem(at: r.file)
+        } catch { log += "download error: \(error.localizedDescription)\n" }
+        await YouTubeSignIn.signOut()
+        let left = await YouTubeSignIn.cookies()
+        log += "after signOut cookies=\(left.count) signedIn=\(YouTubeSignIn.isSignedIn)\n"
+        write(log, dir)
+    }
+
+#endif
     nonisolated final class CancelFlag: @unchecked Sendable {
         private let lock = NSLock(); private var v = false
         func set() { lock.withLock { v = true } }
@@ -483,9 +666,9 @@ enum Snapshotter {
     /// `Backline --snapshot <dir> --readme-shots`: every picture in the README, from the real app, using
     /// Kevin MacLeod's demo songs in the library (the library list is hidden so nothing personal shows).
     ///   play.png · dance.png · beats.png · dance-count-in.png · mini-player.png · install-welcome.png
-    static func readmeShots(model: AppModel, dir: URL) async {
+    static func readmeShots(model: AppModel, dir: URL, keepSidebar: Bool = false) async {
         let originalMode = model.appMode
-        model.showSidebar = false
+        model.showSidebar = keepSidebar
         func open(_ title: String) async -> SongRecord? {
             guard let rec = model.library.first(where: { $0.title.localizedCaseInsensitiveContains(title) }) else { return nil }
             model.select(rec)
@@ -619,8 +802,79 @@ enum Snapshotter {
         capture(dir.appendingPathComponent("h23-empty.png"))
     }
 
+    /// `--sheet-shots --song <file>` (run it with `-appearance light` or `dark`): every Help page, Welcome,
+    /// Save a backing track, and Record with each of its two choices, as the person sees them in that look.
+    /// Nothing is downloaded and the microphone is never asked for.
+    static func sheetShots(model: AppModel, dir: URL) async {
+        var log = "look=\(AppearanceMode.saved.rawValue)\n"
+        func sheet(_ name: String) {
+            if let s = NSApp.windows.first(where: { $0.isVisible && !($0 is MiniPanel) && $0.attachedSheet != nil })?.attachedSheet {
+                captureWindow(s, to: dir.appendingPathComponent(name))
+                log += "\(name) \(Int(s.frame.width))x\(Int(s.frame.height))\n"
+            } else { log += "\(name) missing\n" }
+        }
+        if let song = songArg {
+            model.open(song)
+            var waited = 0.0
+            while model.screen != .mixer && waited < 300 {
+                try? await Task.sleep(for: .seconds(0.5)); waited += 0.5
+                if case .failed(let m) = model.screen { log += "open failed: \(m)\n"; break }
+            }
+            try? await Task.sleep(for: .seconds(1))
+            capture(dir.appendingPathComponent("s0-mixer.png"))
+            model.openExport()
+            try? await Task.sleep(for: .seconds(0.8))
+            sheet("s2-export.png")
+            model.exportSheet = false
+            try? await Task.sleep(for: .seconds(0.6))
+        }
+        model.showWelcome = true
+        try? await Task.sleep(for: .seconds(0.8))
+        sheet("s1-welcome.png")
+        model.showWelcome = false
+        try? await Task.sleep(for: .seconds(0.6))
+        for source in ["app", "microphone"] {
+            UserDefaults.standard.set(source, forKey: "recordSource")
+            model.recordSheet = true
+            try? await Task.sleep(for: .seconds(1.2))
+            sheet("s3-record-\(source).png")
+            model.recordSheet = false
+            try? await Task.sleep(for: .seconds(0.6))
+        }
+        UserDefaults.standard.removeObject(forKey: "recordSource")
+        for (i, t) in HelpTopic.allCases.enumerated() {
+            model.helpTopic = t
+            openWindow?("help")
+            try? await Task.sleep(for: .seconds(i == 0 ? 1.2 : 0.5))
+            if let w = NSApp.windows.first(where: { $0.title == "Backline Help" && $0.isVisible }) {
+                captureWindow(w, to: dir.appendingPathComponent(String(format: "h%02d-%@.png", i + 1, t.rawValue)))
+            } else { log += "help \(t.rawValue) missing\n" }
+        }
+        dismissWindow?("help")
+        log += "help pages=\(HelpContent.pages.count) first=\(HelpContent.pages[0].steps[0].text)\n"
+        try? log.write(to: dir.appendingPathComponent("sheets.txt"), atomically: true, encoding: .utf8)
+    }
+
+    /// Puts the main window in front of every other app's, so it can be seen and its Metal views draw.
+    static func bringToFront() async {
+        NSApp.unhide(nil)
+        NSApp.activate()
+        if let w = NSApp.windows.first(where: { $0.isVisible && !($0 is MiniPanel) }) {
+            // Above other apps' windows for the rest of the run, so a window someone else brings forward
+            // can't cover it between captures.
+            w.level = .floating
+            w.orderFrontRegardless()
+            w.makeKey()
+        }
+        for _ in 0..<20 where NSApp.windows.first(where: { $0.isVisible && !($0 is MiniPanel) })?.occlusionState.contains(.visible) == false {
+            try? await Task.sleep(for: .seconds(0.1))
+        }
+    }
+
     static func captureWindow(_ window: NSWindow, to url: URL) {
-        guard let view = window.contentView?.superview ?? window.contentView,
+        // A borderless panel (the mini player) has no frame view worth drawing: its content is the picture.
+        let frameView = window is MiniPanel ? nil : window.contentView?.superview
+        guard let view = frameView ?? window.contentView,
               let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
         if let data = rep.representation(using: .png, properties: [:]) { try? data.write(to: url) }

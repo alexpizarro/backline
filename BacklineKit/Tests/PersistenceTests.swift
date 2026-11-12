@@ -102,4 +102,27 @@ final class PersistenceTests: XCTestCase {
         XCTAssertNil(rec.settings.spotlight)
         XCTAssertFalse(rec.stems.isEmpty)
     }
+
+    /// 1.1 (D18): the kept source file is an optional field. Older records read as before (no field, the
+    /// original is `original.caf` when `originalScale` says so), and an older build still reads a new record.
+    func testKeptSourceFieldRoundTripsAndOldRecordsAreUnchanged() throws {
+        let data = try Data(contentsOf: Self.fixtures.appendingPathComponent("v011_song.json"))
+        var rec = try JSONDecoder().decode(SongRecord.self, from: data)
+        XCTAssertNil(rec.originalFile)
+        XCTAssertFalse(rec.hasOriginal)
+        rec.originalScale = 0.9
+        XCTAssertTrue(rec.hasOriginal, "original.caf")
+        rec.originalScale = nil
+        rec.originalFile = "source.mp3"
+        XCTAssertTrue(rec.hasOriginal, "the kept source")
+        let out = try JSONEncoder().encode(rec)
+        XCTAssertNoThrow(try JSONDecoder().decode(V011Record.self, from: out))
+        let back = try JSONDecoder().decode(SongRecord.self, from: out)
+        XCTAssertEqual(back.originalFile, "source.mp3")
+        XCTAssertNil(back.originalScale)
+        // A record without the field writes no key for it (older builds see exactly what they wrote).
+        rec.originalFile = nil
+        let plain = try JSONSerialization.jsonObject(with: JSONEncoder().encode(rec)) as! [String: Any]
+        XCTAssertNil(plain["originalFile"])
+    }
 }

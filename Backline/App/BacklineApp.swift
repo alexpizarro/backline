@@ -5,9 +5,37 @@ import SwiftUI
 @main
 struct BacklineApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @State private var model = AppModel()
+    @State private var model: AppModel
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
+
+    init() {
+        // A reset the app didn't live to finish (R01c) is finished before anything loads; only ever inside
+        // this build's own sandbox container.
+        if ResetBackline.isInOwnContainer {
+            ResetBackline.finishPendingIfNeeded()
+            // Core ML's compiled copies of the last build's models, before any model is created (D6).
+            CoreMLCache.clearIfStale()
+            // The downloaded models stay out of Time Machine; the songs stay in it (D5, Mac: models only).
+            BacklineFolders.ensureExcludedFromBackup()
+            // What the last run was doing when it ended (D20 d): an import is kept to try again, a pass counts a
+            // failure, an interrupted lead refinement swap is finished. Before the sweep, which must keep that
+            // import's folder.
+            let recovered = WorkJournal.shared.recoverAtLaunch(store: SongStore.shared)
+            // What an interrupted session left that nothing can reach: an import stopped before its record, other
+            // songs' cleaner checkpoints, a half-unpacked model. Nothing is importing or downloading yet.
+            SongStore.shared.sweepLeftovers(keeping: recovered.keepSongs)
+            // Link downloads nothing is waiting for; an unfinished import's file stays for Try again.
+            ImportStaging.cleanUpDownloads(keeping: recovered.keepFiles, keepAll: recovered.journalUnreadable)
+            // Deleted songs a run didn't live to remove (ios-storage#3), off the main thread.
+            Task.detached(priority: .utility) { ImportStaging.removeDeletedSongs() }
+        }
+        // The system's own crash and hang reports, written to the app's log (D20 f). Nothing leaves the Mac.
+        SystemDiagnostics.start()
+        _model = State(initialValue: AppModel())
+        // Running normally from here until the person quits: a pass that ends before then is its failure.
+        WorkJournal.shared.setInFront(true)
+    }
 
     var body: some Scene {
         Window("Backline", id: "main") {
@@ -22,7 +50,7 @@ struct BacklineApp: App {
                     Snapshotter.run(model: model)
                     #endif
                 }
-                .preferredColorScheme(.dark)
+                .modifier(ChosenLook())
         }
         .defaultSize(width: 1200, height: 780)
         .windowStyle(.hiddenTitleBar)
@@ -33,11 +61,13 @@ struct BacklineApp: App {
         Settings {
             SettingsView()
                 .environment(model)
-                .preferredColorScheme(.dark)
+                .modifier(ChosenLook())
         }
 
         Window("Backline Help", id: "help") {
-            HelpView().environment(model)
+            HelpView()
+                .environment(model)
+                .modifier(ChosenLook())
         }
         .defaultSize(width: 860, height: 640)
         .windowResizability(.contentMinSize)
@@ -59,6 +89,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         FontLoader.registerBundledFonts()
         YouTubeImport.cleanUp()
         YouTubeSignIn.cleanUp()
+        #if !BACKLINE_YTDLP
+        YTDLPImport.removeLeftovers()
+        #endif
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -85,13 +118,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         model?.persistCurrent(synchronously: true)
+        // Quitting: a pass cut off now is not its failure at the next launch (D20 d).
+        WorkJournal.shared.setInFront(false)
     }
 
-    /// Don't silently kill an export or an import in progress.
+    /// What Quit asks first, or nil to quit at once: an export, an import or a recording in progress is never
+    /// cut off without a word (a live take can't be made again).
+    @MainActor static func quitQuestion(_ model: AppModel) -> String? {
+        if model.isExporting { return "Backline is still saving a track." }
+        if model.screen == .analyzing { return "A song is still being split." }
+        if model.recordingUnderWay { return "A song is still being recorded." }
+        return nil
+    }
+
+    /// Don't silently kill an export, an import or a recording in progress.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let model, model.isExporting || model.screen == .analyzing else { return .terminateNow }
+        guard let model, let question = Self.quitQuestion(model) else { return .terminateNow }
         let alert = NSAlert()
-        alert.messageText = model.isExporting ? "Backline is still saving a track." : "A song is still being split."
+        alert.messageText = question
         alert.informativeText = "If you quit now it won't be finished."
         alert.addButton(withTitle: "Keep Working")
         alert.addButton(withTitle: "Quit Anyway")
@@ -114,11 +158,11 @@ struct BacklineCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("Add Song…") { model.addSong() }.keyboardShortcut("o")
-            Button("Record from an App…") { model.recordSheet = true }.keyboardShortcut("r", modifiers: [.command, .shift])
+            Button("Record a Song…") { model.recordSheet = true }.keyboardShortcut("r", modifiers: [.command, .shift])
             if YouTubeImport.isEnabled {
-                Button("Paste YouTube Link") {
-                    if let s = NSPasteboard.general.string(forType: .string), !model.openText(s) {
-                        model.showToast(.init(text: "Copy a YouTube link first, then try again.", isError: true))
+                Button("Paste Link") {
+                    if !model.openText(NSPasteboard.general.string(forType: .string) ?? "") {
+                        model.showToast(.init(text: "Copy a link first.", isError: true))
                     }
                 }
                 .keyboardShortcut("v", modifiers: [.command, .shift])
@@ -147,11 +191,7 @@ struct BacklineCommands: Commands {
             Button("Faster            ⌘→") { model.stepSpeed(1) }.disabled(model.song == nil)
             Button("Pitch Down        ⌘↓") { model.stepPitch(-1) }.disabled(model.song == nil)
             Button("Pitch Up          ⌘↑") { model.stepPitch(1) }.disabled(model.song == nil)
-            Button("Reset Speed & Pitch") {
-                model.settings.trainer.enabled = false
-                model.settings.speed = 100
-                model.settings.pitch = 0
-            }
+            Button("Reset Speed & Pitch") { model.resetSpeedAndPitch() }
             .keyboardShortcut("0")
             .disabled(model.song == nil)
             Divider()

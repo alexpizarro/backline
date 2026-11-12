@@ -1,0 +1,8 @@
+# Reviewed 12 November 2026: not secrets. YouTube's public page constants (in every youtube.com page; iOS
+# docs/release/open-source.md finding 1) and anonymous, expired player tokens saved in the link tests' copies of
+# a music service's public embed page. Only these exact findings are allowed; anything new stops the gate.
+Backline/App/YouTube/POTokenMinter.swift:gcp-api-key:43
+Backline/App/YouTube/POTokenMinter.swift:generic-api-key:42
+BacklineKit/Tests/Fixtures/spotify-embed-track.html:generic-api-key:1
+BacklineKit/Tests/Fixtures/spotify-embed-album.html:generic-api-key:1
+BacklineKit/Tests/Fixtures/spotify-embed-playlist.html:generic-api-key:1

@@ -107,11 +107,17 @@ nonisolated public enum AudioSourceCatalog {
     }
 
     private typealias ResponsibleFn = @convention(c) (pid_t) -> pid_t
+    #if BACKLINE_APP_STORE
+    // The Mac App Store allows public APIs only (guideline 2.5.1), and its checks read function names in the
+    // binary. Without this, a WebKit audio helper is listed as "Web page (Safari or another app)" (step 2 above).
+    private static let responsibleFn: ResponsibleFn? = nil
+    #else
     private static let responsibleFn: ResponsibleFn? = {
         guard let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "responsibility_get_pid_responsible_for_pid")
         else { return nil }                              // RTLD_DEFAULT == (void*)-2 on Darwin
         return unsafeBitCast(sym, to: ResponsibleFn.self)
     }()
+    #endif
     static func responsiblePID(_ pid: pid_t) -> pid_t? {
         guard let f = responsibleFn else { return nil }
         let r = f(pid)

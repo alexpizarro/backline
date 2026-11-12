@@ -70,7 +70,12 @@ public final class RoformerSeparator: @unchecked Sendable {
     private let model: MLModel
     private let stft: RoformerSTFT
 
-    public init(modelURL: URL, computeUnits: MLComputeUnits = .cpuAndGPU) throws {
+    public init(modelURL: URL, computeUnits: MLComputeUnits = .cpuOnly) throws {
+        // The GPU is left alone on purpose. Measured on an iPhone 15 Pro (20 s of a real song, both
+        // backends on the identical chunk): .cpuAndGPU returns stems that correlate only 0.85-0.92 with
+        // a Mac reference and whose sum is -14.5 dB from the mix, while .cpuOnly scores 0.94-0.9997 and
+        // -35.2 dB. The FP16 mlprogram graph is not numerically sound on the device GPU. CPU is also
+        // slightly faster there (37 s vs 43 s), so nothing is given up. Checked by --diag-roformer.
         let config = MLModelConfiguration()
         config.computeUnits = computeUnits
         config.allowLowPrecisionAccumulationOnGPU = false
@@ -104,11 +109,14 @@ public final class RoformerSeparator: @unchecked Sendable {
     }
 
     /// Separates `audio` (44.1 kHz stereo). Returns planar stereo per source, in `sources` order.
+    /// With a `checkpoint`, finished audio is kept on disk as it is made and an interrupted run resumes there.
     public func separate(_ audio: StereoAudio,
+                         checkpoint: SeparationCheckpoint? = nil,
                          progress: @escaping @Sendable (Progress) -> Void = { _ in },
                          isCancelled: @escaping @Sendable () -> Bool = { false }) throws -> [StereoAudio] {
         let n0 = audio.frameCount
         guard n0 > 0 else { throw CocoaError(.coderValueNotFound) }
+        if isCancelled() { throw CancellationError() }
         let L = Self.chunk
         let S = Self.sources.count
         let T = Self.frames
@@ -138,6 +146,24 @@ public final class RoformerSeparator: @unchecked Sendable {
         var out = [[Float]](repeating: [Float](repeating: 0, count: n), count: S * 2)
         var counter = [Float](repeating: 0, count: n)
 
+        // An interrupted run left a final prefix: load it (its window weight is 1) and recompute only the chunk
+        // that straddles its end, accumulating past the prefix. A checkpoint that cannot be used is started over.
+        var writer: CheckpointWriter?
+        if let checkpoint {
+            writer = try? CheckpointWriter(checkpoint, total: n, step: step, channels: S * 2)
+            if let w = writer, w.resumeFrom > 0, (try? w.loadPrefix(into: &out)) == nil {
+                writer = nil
+                checkpoint.discard()
+                for k in out.indices { out[k].withUnsafeMutableBufferPointer { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(n)) } }
+                writer = try? CheckpointWriter(checkpoint, total: n, step: step, channels: S * 2)
+            }
+        }
+        let resumeFrom = writer?.resumeFrom ?? 0
+        if resumeFrom > 0 {
+            var one: Float = 1
+            counter.withUnsafeMutableBufferPointer { vDSP_vfill(&one, $0.baseAddress!, 1, vDSP_Length(resumeFrom)) }
+        }
+
         let specArr = try MLMultiArray(shape: [1, NSNumber(value: T), NSNumber(value: F)], dataType: .float32)
         guard let specPitch = Self.rowPitch(specArr, shape: [1, T, F]) else {
             throw RoformerSeparatorError.unexpectedLayout("input strides \(specArr.strides)")
@@ -148,8 +174,9 @@ public final class RoformerSeparator: @unchecked Sendable {
 
         let chunks = (n + step - 1) / step
         let start = Date()
-        var ci = 0
-        var offset = 0
+        var offset = resumeFrom >= n ? n : Swift.max(0, resumeFrom - step)
+        var ci = resumeFrom >= n ? chunks : offset / step
+        let firstChunk = ci
         while offset < n {
             if isCancelled() { throw CancellationError() }
             let clen = Swift.min(L, n - offset)
@@ -178,7 +205,7 @@ public final class RoformerSeparator: @unchecked Sendable {
 
             try autoreleasepool {
                 let input = try MLDictionaryFeatureProvider(dictionary: ["spec": MLFeatureValue(multiArray: specArr)])
-                let result = try model.prediction(from: input)
+                let result = try DemucsSeparator.predict(model, input, isCancelled: isCancelled)
                 guard let outArr = result.featureValue(for: "out")?.multiArrayValue else {
                     throw RoformerSeparatorError.missingOutput
                 }
@@ -199,6 +226,8 @@ public final class RoformerSeparator: @unchecked Sendable {
                     }
                 }
 
+                // Only the first chunk of a resumed run overlaps the loaded prefix: skip that part.
+                let skip = Swift.max(0, resumeFrom - offset)
                 outArr.withUnsafeBufferPointer(ofType: Float.self) { modelOut in
                     let base = modelOut.baseAddress!
                     let off = offset
@@ -216,8 +245,8 @@ public final class RoformerSeparator: @unchecked Sendable {
                                         let y = ola.baseAddress! + self.stft.trim
                                         self.stft.applyWindowSum(y, count: clen)
                                         accBase[k].withUnsafeMutableBufferPointer { dst in
-                                            vDSP_vma(y, 1, w.baseAddress!, 1, dst.baseAddress! + off, 1,
-                                                     dst.baseAddress! + off, 1, vDSP_Length(clen))
+                                            vDSP_vma(y + skip, 1, w.baseAddress! + skip, 1, dst.baseAddress! + off + skip, 1,
+                                                     dst.baseAddress! + off + skip, 1, vDSP_Length(clen - skip))
                                         }
                                     }
                                 }
@@ -227,15 +256,24 @@ public final class RoformerSeparator: @unchecked Sendable {
                 }
             }
 
+            let skip = Swift.max(0, resumeFrom - offset)
             counter.withUnsafeMutableBufferPointer { cp in
-                vDSP_vadd(cp.baseAddress! + offset, 1, window, 1, cp.baseAddress! + offset, 1, vDSP_Length(clen))
+                window.withUnsafeBufferPointer { w in
+                    vDSP_vadd(cp.baseAddress! + offset + skip, 1, w.baseAddress! + skip, 1,
+                              cp.baseAddress! + offset + skip, 1, vDSP_Length(clen - skip))
+                }
+            }
+            // No later chunk reaches below `offset + step`: those samples are final.
+            if let w = writer, (try? w.append(upTo: Swift.min(offset + step, n), accumulated: out, weight: counter)) == nil {
+                writer = nil
             }
 
             offset += step
             ci += 1
             let elapsed = Date().timeIntervalSince(start)
+            let doneNow = ci - firstChunk
             progress(Progress(fraction: Double(ci) / Double(chunks), chunk: ci, chunks: chunks,
-                              secondsRemaining: elapsed / Double(ci) * Double(Swift.max(0, chunks - ci))))
+                              secondsRemaining: elapsed / Double(doneNow) * Double(Swift.max(0, chunks - ci))))
         }
 
         // result / counter, then drop the reflect padding.

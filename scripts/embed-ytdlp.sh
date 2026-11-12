@@ -1,12 +1,19 @@
 #!/bin/zsh
-# Xcode build phase: unpack the YouTube downloader into the app and sign it for the sandbox.
+# Xcode build phase, only with BACKLINE_YTDLP=1: unpack the 1.0 YouTube downloader into the app and sign it
+# for the sandbox.
 #
 # Default: our own native build of yt-dlp (compiled from source with Nuitka by scripts/build-ytdlp.sh,
 # Vendor/yt-dlp/yt-dlp-native-arm64.zip). Rollback: YTDLP_FLAVOR=pyinstaller uses the official
 # PyInstaller release (Vendor/yt-dlp/yt-dlp_macos.zip). Either way the launcher is Resources/yt-dlp/yt-dlp.
 set -euo pipefail
-SRC="${SRCROOT}/Vendor/yt-dlp"
 DST="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/yt-dlp"
+# Links use the Swift engine shared with iOS (decision D10). yt-dlp comes back only in a build made with
+# BACKLINE_YTDLP=1, for one release; otherwise nothing is embedded and a copy from an earlier build goes.
+if [ "${BACKLINE_YTDLP:-0}" != 1 ]; then
+  rm -rf "$DST"
+  exit 0
+fi
+SRC="${SRCROOT}/Vendor/yt-dlp"
 FLAVOR=${YTDLP_FLAVOR:-native}
 [ "$FLAVOR" = native ] && [ ! -f "$SRC/yt-dlp-native-arm64.zip" ] && FLAVOR=pyinstaller
 

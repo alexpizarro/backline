@@ -66,7 +66,7 @@ public enum StemKind: String, Codable, CaseIterable, Identifiable, Hashable, Sen
         case .bass: "waveform.path"
         case .drums: "light.cylindrical.ceiling.fill"
         case .keys: "pianokeys"
-        case .other: "sparkles"
+        case .other: "music.note"
         case .kick: "circle.fill"
         case .snare: "circle.circle"
         case .hats: "line.3.horizontal"
@@ -225,6 +225,10 @@ public struct SongSettings: Codable, Hashable, Sendable {
     /// Parts turned off in the modes that aren't showing (the shown mode's set lives in `removed`).
     public var removedByMode: [String: [String]] = [:]
     public var musicOpen = false                          // Beats: Music shown as its separate parts
+    // v1.0 (U05)
+    /// A part the person moved by hand: true = main list, false = "More parts". Beats the level gate.
+    public var partPlacement: [String: Bool] = [:]
+    public var moreOpen = false                           // "More parts" shown open
 
     public init() {}
 
@@ -235,6 +239,7 @@ public struct SongSettings: Codable, Hashable, Sendable {
         case sectionNames, lastPosition, tempoScale, guide, click, showGuitarSplit
         case removedExact, soloExact
         case mode, danceStyle, countOne, spotlight, removedByMode, musicOpen
+        case partPlacement, moreOpen
     }
 
     public init(from decoder: Decoder) throws {
@@ -268,6 +273,8 @@ public struct SongSettings: Codable, Hashable, Sendable {
         spotlight = (try? c.decodeIfPresent(String.self, forKey: .spotlight)).flatMap(StemKind.init(rawValue:))
         removedByMode = (try? c.decodeIfPresent([String: [String]].self, forKey: .removedByMode)) ?? [:]
         musicOpen = (try? c.decodeIfPresent(Bool.self, forKey: .musicOpen)) ?? false
+        partPlacement = (try? c.decodeIfPresent([String: Bool].self, forKey: .partPlacement)) ?? [:]
+        moreOpen = (try? c.decodeIfPresent(Bool.self, forKey: .moreOpen)) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -299,6 +306,8 @@ public struct SongSettings: Codable, Hashable, Sendable {
         try c.encodeIfPresent(spotlight?.rawValue, forKey: .spotlight)
         if !removedByMode.isEmpty { try c.encode(removedByMode, forKey: .removedByMode) }
         if musicOpen { try c.encode(musicOpen, forKey: .musicOpen) }
+        if !partPlacement.isEmpty { try c.encode(partPlacement, forKey: .partPlacement) }
+        if moreOpen { try c.encode(moreOpen, forKey: .moreOpen) }
     }
 }
 
@@ -386,7 +395,17 @@ public struct SongRecord: Codable, Identifiable, Equatable, Sendable {
     // v0.17
     public var drumSplit: DrumSplit?                      // present when kick/snare/hats/toms.caf exist
     public var originalScale: Float?                      // present when original.caf (the mix) is kept
+    /// v1.1 (D18): the kept original is the file the song came from (`source.mp3`, `source.m4a`), in the song's
+    /// folder, when that file was lossy audio. It is decoded as the import decoded it; no storage gain applies.
+    /// nil: the original is `original.caf` (with `originalScale`), or there is none.
+    public var originalFile: String?
     public var separator: String?                         // nil = HTDemucs 6s; "bs-roformer-sw" after the cleaner pass
+    // v1.0 (U05)
+    /// Each part's level against the whole song (StemKind.rawValue, plus "otherSplit"); nil for songs split
+    /// before it existed (they are measured once in the background).
+    public var levels: [String: PartLevel]?
+    /// What the sound classifier hears (U06): "mix" (the whole song), "guitar" and "lead" (their active frames).
+    public var instruments: [String: InstrumentShares]?
 
     public init(id: String, title: String, artist: String?, duration: Double, sourceName: String,
                 addedAt: Date, lastOpened: Date, stems: [StemKind], analysis: SongAnalysis,
@@ -415,6 +434,10 @@ public struct SongRecord: Codable, Identifiable, Equatable, Sendable {
     }
 
     public var drumSplitActive: Bool { drumSplit != nil && stems.contains(.drums) }
+
+    /// True when the song's original mix is on disk (`original.caf` or the kept source file), so a cleaner
+    /// model can split the real audio.
+    public var hasOriginal: Bool { originalScale != nil || originalFile != nil }
 
     /// File name stem for a stored stem (`lead` / `rhythm` for the split parts).
     public static func fileStem(_ k: StemKind) -> String {
@@ -458,6 +481,7 @@ public struct SongRecord: Codable, Identifiable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, title, artist, duration, sourceName, addedAt, lastOpened, stems, analysis, peaks
         case storageScale, hasArtwork, settings, guitarSplit, bpmOverride, drumSplit, originalScale, separator
+        case levels, instruments, originalFile
     }
 
     public init(from decoder: Decoder) throws {
@@ -481,6 +505,9 @@ public struct SongRecord: Codable, Identifiable, Equatable, Sendable {
         drumSplit = try? c.decodeIfPresent(DrumSplit.self, forKey: .drumSplit)
         originalScale = try? c.decodeIfPresent(Float.self, forKey: .originalScale)
         separator = try? c.decodeIfPresent(String.self, forKey: .separator)
+        originalFile = (try? c.decodeIfPresent(String.self, forKey: .originalFile)) ?? nil
+        levels = (try? c.decodeIfPresent([String: PartLevel].self, forKey: .levels)) ?? nil
+        instruments = (try? c.decodeIfPresent([String: InstrumentShares].self, forKey: .instruments)) ?? nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -503,6 +530,9 @@ public struct SongRecord: Codable, Identifiable, Equatable, Sendable {
         try c.encodeIfPresent(drumSplit, forKey: .drumSplit)
         try c.encodeIfPresent(originalScale, forKey: .originalScale)
         try c.encodeIfPresent(separator, forKey: .separator)
+        try c.encodeIfPresent(levels, forKey: .levels)
+        try c.encodeIfPresent(instruments, forKey: .instruments)
+        try c.encodeIfPresent(originalFile, forKey: .originalFile)
     }
 }
 

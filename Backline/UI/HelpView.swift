@@ -31,7 +31,6 @@ struct HelpView: View {
         }
         .frame(minWidth: 760, minHeight: 540)
         .background(Theme.bg)
-        .preferredColorScheme(.dark)
     }
 }
 
@@ -124,10 +123,10 @@ struct HelpPageView: View {
     @ViewBuilder private var actions: some View {
         switch page.topic {
         case .youtubeSignIn where YouTubeSignIn.isEnabled:
-            Button("Sign in to YouTube") { model.youTubeSignInSheet = true; closeHelp() }
+            Button("Sign in") { model.youTubeSignInSheet = true; closeHelp() }
                 .buttonStyle(PrimaryButtonStyle())
         case .record:
-            Button("Record from an app…") { model.recordSheet = true; closeHelp() }
+            Button("Record a song…") { model.recordSheet = true; closeHelp() }
                 .buttonStyle(PrimaryButtonStyle())
         case .addSong:
             Button("Add a song…") { closeHelp(); model.addSong() }

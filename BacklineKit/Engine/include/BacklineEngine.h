@@ -1,7 +1,8 @@
 // Backline real-time stem engine (C API over a C++ core).
 //
-// All stems are held in RAM as planar float32 and mixed inside one render callback, so they are
-// sample-locked by construction. Each stem runs through its own Signalsmith Stretch instance
+// All stems are held in RAM as planar 16-bit samples (the depth of the stored parts; half the memory of float32)
+// and converted to float (x / 32768, exact) as the mixer reads them. They are mixed inside one render callback,
+// so they are sample-locked by construction. Each stem runs through its own Signalsmith Stretch instance
 // (time-stretch + pitch-shift), which keeps mute/solo/volume changes instant even when stretched.
 // Rate 1.0 / 0 st bypasses the stretcher entirely (no latency, no processing artefacts).
 // The summed output passes through a soft limiter above -1 dBFS so boosted stems never clip.
@@ -23,9 +24,11 @@ BLEngine *_Nonnull bl_engine_create(double sampleRate);
 void bl_engine_destroy(BLEngine *_Nonnull e);
 
 /// Stops playback, waits until the audio thread has left the engine, then (re)allocates storage for
-/// `stemCount` stereo stems of `frames` frames. Fill channels via bl_engine_stem_channel, then commit.
+/// `stemCount` stereo stems of `frames` frames. Fill channels via bl_engine_stem_channel16, then commit. The old
+/// song is released first; false (and no song) when the memory can't be had. Unfilled frames read as silence.
 bool bl_engine_allocate(BLEngine *_Nonnull e, int stemCount, int64_t frames);
-float *_Nullable bl_engine_stem_channel(BLEngine *_Nonnull e, int stem, int channel);
+/// One channel of a stem: `frames` 16-bit samples (full scale is 32768).
+int16_t *_Nullable bl_engine_stem_channel16(BLEngine *_Nonnull e, int stem, int channel);
 /// Pitch-locked stems (drums) are time-stretched but never transposed.
 void bl_engine_set_stem_pitch_locked(BLEngine *_Nonnull e, int stem, bool locked);
 void bl_engine_commit(BLEngine *_Nonnull e);
@@ -44,6 +47,9 @@ void bl_engine_set_click_gain(BLEngine *_Nonnull e, float gain);
 /// playback rate, are never pitch-shifted and are never exported.
 void bl_engine_set_beat_grid(BLEngine *_Nonnull e, const int64_t *_Nullable frames, const uint8_t *_Nullable accents, int count);
 void bl_engine_set_click(BLEngine *_Nonnull e, bool enabled);
+/// Scrub hold: while on, playback is silent and seeks only move the position (no stretcher re-prime per seek);
+/// turning it off restarts audio at the last seek with a fade-in.
+void bl_engine_set_hold(BLEngine *_Nonnull e, bool on);
 
 /// Speed trainer: while looping, the rate becomes min(to, from + step·⌊passes/every⌋) exactly at each
 /// loop wrap (sample-accurate, so the new speed starts on the loop's downbeat). Overrides set_rate.
@@ -64,6 +70,10 @@ typedef struct {
 } BLEngineStatus;
 
 BLEngineStatus bl_engine_status(const BLEngine *_Nonnull e);
+
+/// Levels of the last render block (AD-11): `parts[i]` is the RMS of what part i adds to the mix (its gain
+/// included) for i < n, and `*master` the RMS of the output. All 0 while paused, counting in or holding.
+void bl_engine_levels(const BLEngine *_Nonnull e, float *_Nullable parts, int n, float *_Nullable master);
 
 /// Real-time render. Writes (does not add) `frames` samples to each channel.
 void bl_engine_render(BLEngine *_Nonnull e, float *_Nonnull left, float *_Nonnull right, int frames);

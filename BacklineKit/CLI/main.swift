@@ -17,6 +17,46 @@ func writeWav(_ a: StereoAudio, to url: URL) throws {
 }
 
 let args = CommandLine.arguments
+// backline-cli presence <mix.wav|-> <stemdir>   (U05: each part's level against the song, and what the app decides)
+//   stemdir holds vocals/drums/bass/guitar/piano/other.wav (from `separate`) and, if split, lead/rhythm.wav;
+//   "-" measures against the sum of the six parts, which is what the app does.
+if args.count >= 4, args[1] == "presence" {
+    let dir = URL(fileURLWithPath: args[3])
+    func load(_ n: String) -> StereoAudio? { try? AudioDecoder.decode(dir.appendingPathComponent("\(n).wav")) }
+    let names = ["vocals", "drums", "bass", "guitar", "piano", "other"]
+    let parts = names.compactMap { n in load(n).map { (n, $0) } }
+    guard !parts.isEmpty else { print("no stems in \(dir.path)"); exit(2) }
+    var mix: StereoAudio
+    if args[2] == "-" {
+        mix = parts[0].1
+        for (_, s) in parts.dropFirst() {
+            let n = min(mix.frameCount, s.frameCount)
+            vDSP_vadd(mix.left, 1, s.left, 1, &mix.left, 1, vDSP_Length(n))
+            vDSP_vadd(mix.right, 1, s.right, 1, &mix.right, 1, vDSP_Length(n))
+        }
+    } else {
+        mix = try AudioDecoder.decode(URL(fileURLWithPath: args[2]))
+    }
+    let mixFrames = PartPresence.frames(mix)
+    func level(_ a: StereoAudio) -> PartLevel { PartPresence.level(part: PartPresence.frames(a), mix: mixFrames) }
+    print("part      share dB   active   p95 dB   present")
+    var levels: [String: PartLevel] = [:]
+    for (n, s) in parts + ["lead", "rhythm"].compactMap({ n in load(n).map { (n, $0) } }) {
+        let l = level(s)
+        levels[n] = l
+        print(String(format: "%-8@ %9.1f %8.2f %8.1f   %@", n as NSString, l.share, l.active, l.peak,
+                     PartPresence.isPresent(l) ? "yes" : "no (More parts)"))
+    }
+    if let g = levels["guitar"] {
+        let silent = g.share < PartPresence.silentShare
+        print("guitar: \(silent ? "silent, folded into Other" : PartPresence.isPresent(g) ? "present, split tried" : "quiet, its own part under More parts, not split")")
+        if !silent, PartPresence.isPresent(g), let l = levels["lead"], let r = levels["rhythm"] {
+            let keep = l.active >= PartPresence.splitHalfActive && r.active >= PartPresence.splitHalfActive
+            print("split: \(keep ? "kept: Lead and Rhythm guitar" : "dropped: one Guitar part")")
+        }
+    }
+    exit(0)
+}
 // backline-cli split <guitar.wav> <outdir>   (stereo lead/rhythm split)
 // backline-cli lead-ml <input.wav> <outdir> --model <LeadRhythmHTDemucs.mlpackage>
 if args.count >= 4, args[1] == "lead-ml" {
