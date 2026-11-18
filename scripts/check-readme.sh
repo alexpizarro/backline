@@ -20,7 +20,8 @@ fail=0
 reviewed=$(grep -o 'readme-reviewed-for: [0-9][0-9.]*' "$README" | awk '{print $2}' | tail -1)
 shots=$(grep -o 'screenshots-taken-with: [0-9][0-9.]*' "$README" | awk '{print $2}' | tail -1)
 [ "$reviewed" = "$VERSION" ] || { echo "✗ README was not reviewed for $VERSION (stamp says: ${reviewed:-none})"; fail=1; }
-[ "$shots" = "$VERSION" ] || { echo "✗ README screenshots were not retaken for $VERSION (stamp says: ${shots:-none})"; fail=1; }
+# A fix-only release (x.y.z) keeps the pictures taken with x.y: no screen changes in one.
+[ "$shots" = "$VERSION" ] || [ "$shots" = "${VERSION%.*}" -a "$VERSION" != "${VERSION%.*}" -a "$(echo "$VERSION" | tr -cd . | wc -c | tr -d ' ')" = 2 ] || { echo "✗ README screenshots were not retaken for $VERSION (stamp says: ${shots:-none})"; fail=1; }
 
 # Every picture the README uses must exist.
 for img in $(grep -o 'docs/images/[A-Za-z0-9._-]*\.png' "$README" | sort -u); do

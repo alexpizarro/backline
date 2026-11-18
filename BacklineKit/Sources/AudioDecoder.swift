@@ -54,7 +54,16 @@ public enum AudioDecoder {
     }
 
     /// The file's length in seconds without decoding it (nil when the file doesn't say).
+    ///
+    /// The audio's own frame count comes first. `AVURLAsset`'s duration adds a fragmented MP4's stated length to
+    /// its fragments, so YouTube's audio (every direct download) read twice as long as it is, and a 9-minute song
+    /// was refused as "Longer than 14 minutes." The asset is asked only for what `AVAudioFile` can't open
+    /// (videos), as `decode` does.
     public static func duration(of url: URL) async -> Double? {
+        if let file = try? guarded({ try AVAudioFile(forReading: url) }),
+           let frames = try? guarded({ file.length }), frames > 0, file.fileFormat.sampleRate > 0 {
+            return Double(frames) / file.fileFormat.sampleRate
+        }
         guard let d = try? await AVURLAsset(url: url).load(.duration), d.isNumeric, d.seconds > 0 else { return nil }
         return d.seconds
     }

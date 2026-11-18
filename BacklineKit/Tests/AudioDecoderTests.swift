@@ -40,6 +40,27 @@ final class AudioDecoderTests: XCTestCase {
         }
     }
 
+    /// YouTube's audio is a fragmented MP4 whose header states the whole length, and `AVURLAsset` adds that to
+    /// the fragments: a 9-minute song read as 18 minutes and was refused as "Longer than 14 minutes." (1.1).
+    /// The fixture is 6 s laid out the same way (dash + sidx, the stated length written in); the asset says 12 s.
+    func testAFragmentedMP4IsItsRealLength() async throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/youtube-dash-6s.m4a")
+        let asset = try await AVURLAsset(url: url).load(.duration).seconds
+        XCTAssertGreaterThan(asset, 11, "the fixture still shows what AVURLAsset does with it")
+        let measured = await AudioDecoder.duration(of: url)
+        let seconds = try XCTUnwrap(measured)
+        XCTAssertEqual(seconds, 6, accuracy: 0.1)
+        let decoded = try AudioDecoder.decode(url)
+        XCTAssertEqual(seconds, Double(decoded.frameCount) / decoded.sampleRate, accuracy: 0.1, "the length matches what decodes")
+    }
+
+    /// A video still gets its length from the asset (`AVAudioFile` can't open every video container).
+    func testAVideoStillHasALength() async {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/video-no-audio.mp4")
+        let seconds = await AudioDecoder.duration(of: url)
+        XCTAssertNotNil(seconds)
+    }
+
     /// F6, then ios-split-safety: a 48 kHz file is resampled with the fastest setting that keeps the whole band.
     /// Wave 1's normal converter was 13 times faster than mastering at max but dropped everything above about
     /// 17 kHz; the shipped one (mastering at low quality) is about 6 times faster on a real song and differs from

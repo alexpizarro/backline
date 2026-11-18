@@ -225,5 +225,5 @@ cached so a run doesn't download the models each time.
 - **Screenshots:** the demo songs are "Volatile Reaction", "Big Rock" and "Metalmania" by Kevin MacLeod
   ([incompetech.com](https://incompetech.com), Creative Commons: By Attribution, CC BY).
 
-<!-- readme-reviewed-for: 1.1 -->
+<!-- readme-reviewed-for: 1.1.1 -->
 <!-- screenshots-taken-with: 1.1 -->
