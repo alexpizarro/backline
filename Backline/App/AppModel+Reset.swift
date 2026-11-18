@@ -99,6 +99,7 @@ extension AppModel {
         ExtraParts.shared.reset()
         artwork = nil
         ResetBackline.clearDefaults(.standard, domain: Bundle.main.bundleIdentifier)
+        AppUpdate.shared.refreshOffer()   // its kept answer and Not now went with the defaults
         ResetBackline.finish(locations)
         Task.detached(priority: .utility) { ResetBackline.emptyTrash(locations) }
         AppLog.note("reset: done")

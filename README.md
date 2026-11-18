@@ -172,6 +172,9 @@ are included with Backline.
 
 ## Updates and feedback
 
+Backline tells you when a newer version is out: once a day it checks this repository's releases (the Mac App
+Store version asks the App Store) and shows it at the top of the Library, with a button to get it.
+
 Backline is a personal project. I'm the only person who makes changes, and I don't take pull requests.
 Bug reports and ideas are welcome as [issues](https://github.com/alexpizarro/backline/issues); see
 [CONTRIBUTING.md](CONTRIBUTING.md). Please report security problems privately, as
@@ -225,5 +228,5 @@ cached so a run doesn't download the models each time.
 - **Screenshots:** the demo songs are "Volatile Reaction", "Big Rock" and "Metalmania" by Kevin MacLeod
   ([incompetech.com](https://incompetech.com), Creative Commons: By Attribution, CC BY).
 
-<!-- readme-reviewed-for: 1.1.1 -->
-<!-- screenshots-taken-with: 1.1 -->
+<!-- readme-reviewed-for: 1.1.2 -->
+<!-- screenshots-taken-with: 1.1.2 -->

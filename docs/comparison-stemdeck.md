@@ -1,6 +1,6 @@
 # Backline vs StemDeck: for a musician or student
 
-*Last updated 12 November 2026 for Backline 1.1, still true for Backline 1.1.1 (the Backline column; the StemDeck column is as it was on
+*Last updated 12 November 2026 for Backline 1.1, still true for Backline 1.1.2 (the Backline column; the StemDeck column is as it was on
 24 October). The first comparison, on 26 September, read both apps
 from source (Backline 0.13, [StemDeck](https://github.com/stemdeckapp/stemdeck) 0.18.1). The StemDeck
 column was brought up to its 0.20.0 release from its release notes only, so check its page for the

@@ -110,6 +110,10 @@ struct GeneralSettings: View {
                 LabeledContent("Version") {
                     Text("\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "–")")
                 }
+                if let version = AppUpdate.shared.newerVersion {
+                    Button(AppUpdate.settingsTitle(version: version)) { openUpdatePage() }
+                        .accessibilityIdentifier("settings.update")
+                }
                 HStack {
                     Link("Privacy policy", destination: BacklineSite.privacy)
                     Spacer()

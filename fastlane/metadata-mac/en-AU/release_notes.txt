@@ -1,1 +1,2 @@
+• New: Backline tells you when a newer version is out, so you know when to update.
 • Fixed: some long songs from links were wrongly said to be too long.

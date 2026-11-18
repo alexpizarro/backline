@@ -11,9 +11,9 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "1.1.1"
+    MARKETING_VERSION: "1.1.2"
     # Set to `git rev-list --count HEAD` by scripts/set-build-number.sh after the last commit (as iOS R04).
-    CURRENT_PROJECT_VERSION: "176"
+    CURRENT_PROJECT_VERSION: "186"
     DEVELOPMENT_TEAM: SBMJ9PMG22
     CODE_SIGN_STYLE: Automatic
     CODE_SIGN_IDENTITY: "Apple Development"

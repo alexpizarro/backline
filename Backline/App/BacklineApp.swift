@@ -94,6 +94,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
     }
 
+    /// Is a newer Backline out? At most once a day (`AppUpdate`).
+    func applicationDidBecomeActive(_ notification: Notification) {
+        AppUpdate.shared.checkIfDue()
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         pending.append(contentsOf: urls)
         flushPending()

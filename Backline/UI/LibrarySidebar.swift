@@ -1,4 +1,5 @@
 import BacklineKit
+import AppKit
 import SwiftUI
 
 struct LibrarySidebar: View {
@@ -49,6 +50,9 @@ struct LibrarySidebar: View {
 
             ScrollView {
                 VStack(spacing: 2) {
+                    if let version = AppUpdate.shared.libraryOffer {
+                        UpdateRow(version: version).padding(.bottom, 6)
+                    }
                     if model.screen == .analyzing {
                         ImportingRow(title: model.importTitle, fraction: model.importProgress.fraction)
                     }
@@ -192,6 +196,61 @@ struct ImportingRow: View {
         .padding(.horizontal, 10)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.card.opacity(0.6)))
     }
+}
+
+/// A newer Backline is out (`AppUpdate`): one row at the top of the Library, with Update (the Mac App Store
+/// build) or Download (the disk image: the GitHub release's page), and Not now (hides this version from the
+/// Library; Settings still offers it).
+struct UpdateRow: View {
+    let version: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "arrow.down.app.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.primaryTint)
+                    .padding(.top, 2)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("A new version of Backline is out")
+                        .font(Typo.ui(13, .semibold))
+                        .foregroundStyle(Theme.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(AppUpdate.line(version: version))
+                        .font(Typo.ui(11.5))
+                        .foregroundStyle(Theme.ink2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("update.row")
+            HStack(spacing: 6) {
+                Button(AppUpdate.buttonTitle()) { openUpdatePage() }
+                    .fixedSize()
+                    .buttonStyle(PrimaryButtonStyle(padding: EdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 10)))
+                    .accessibilityIdentifier("update.open")
+                Button("Not now") { withAnimation(.smooth(duration: 0.25)) { AppUpdate.shared.hide() } }
+                    .fixedSize()
+                    .buttonStyle(SecondaryButtonStyle(padding: EdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 10)))
+                    .accessibilityIdentifier("update.hide")
+                Spacer(minLength: 0)
+            }
+            // The sidebar is narrow: the buttons take the row's full width and never wrap a word.
+            .lineLimit(1)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 9)
+        .padding(.horizontal, 10)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.card.opacity(0.6)))
+    }
+}
+
+/// Opens where the update is: the Mac App Store (or its web page if that can't open), or the GitHub release.
+@MainActor func openUpdatePage() {
+    let page = AppUpdate.shared.page
+    if !NSWorkspace.shared.open(page), page == AppUpdate.storeURL { NSWorkspace.shared.open(AppUpdate.storeWebURL) }
 }
 
 /// An import the last run ended during (D20 d): the song's name, what happened in one line, and the way
